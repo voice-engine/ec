@@ -26,12 +26,12 @@ make
 ### Usage
 1. Run `ec -h` to show its command line options
 2. Run `ec -l` to get audio devices' index
-3. Select audio input/output devices `ec -r {recording device index} -p {playback device index} -c {recording channels}`
+3. Select audio input/output devices `ec -i {input device index} -o {output device index} -c {input channels}`
 
 ```
 ec -h
 ec -l
-ec -r 0 -p 0 playback.raw recording.raw out.raw
+ec -i 0 -o 0 -s
 ```
 
 ### Hardware
