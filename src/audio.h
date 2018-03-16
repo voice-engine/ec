@@ -2,7 +2,6 @@
 #ifndef _AUDIO_H_
 #define _AUDIO_H_
 
-#include <pa_util.h>
 #include <pa_ringbuffer.h>
 
 #define CAPTURE_INDEX       0
@@ -10,11 +9,12 @@
 #define PLAYED_INDEX        2
 #define PROCESSED_INDEX     3
 
+extern char *g_playback_device;
+extern char *g_capture_device;
+
 extern PaUtilRingBuffer g_ringbuffer[];
 
-
-void audio_list();
-void audio_start(int in_device, int out_device, int sample_rate, int num_channels, int frame_count);
+void audio_start(int sample_rate, int channels, int ring_buffer_size);
 void audio_stop();
 
 

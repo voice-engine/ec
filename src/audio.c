@@ -9,242 +9,271 @@
 #include <unistd.h>
 #include <pthread.h>
 
-#include <portaudio.h>
+#include <alsa/asoundlib.h>
 
 #include <audio.h>
 
-
-const int bits_per_sample = 16;     // only support 16 bits sample width
-const int g_output_channels = 1;    // only support mono output
-int g_input_channels = 2;
-
+const unsigned bits_per_sample = 16;  // only support 16 bits sample width
+const unsigned g_output_channels = 1; // only support mono output
+unsigned g_input_channels = 2;
+unsigned g_sample_rate = 16000;
 
 PaUtilRingBuffer g_ringbuffer[4];
 
-// Pointer to PortAudio stream.
-PaStream *g_pa_stream;
-PaStream *g_playback_stream;
+char *g_playback_device = "default";
+char *g_capture_device = "default";
 
-pthread_t g_playback_thread;
+static pthread_t g_playback_thread;
+static pthread_t g_capture_thread;
+
+static snd_output_t *log;
 
 extern int g_is_quit;
 
-int audio_callback(const void *input,
-                      void *output,
-                      unsigned long frame_count,
-                      const PaStreamCallbackTimeInfo *time_info,
-                      PaStreamCallbackFlags status_flags,
-                      void *user_data)
+unsigned set_params(snd_pcm_t *handle, unsigned rate, unsigned channels)
 {
-    ring_buffer_size_t written =
-            PaUtil_WriteRingBuffer(&g_ringbuffer[CAPTURE_INDEX], input, frame_count);
-    if (written < frame_count) {
-        printf("lost %ld frames\n", frame_count - written);
-    }
+    int err;
+    unsigned buffer_time = 0;
+    unsigned period_time = 0;
+    unsigned long chunk_size = 0;
+    snd_pcm_hw_params_t *hw_params;
+    unsigned new_rate = rate;
 
-    return paContinue;
-}
+    err = snd_pcm_hw_params_malloc(&hw_params);
+    assert(err >= 0);
 
-int playback_callback(const void *input,
-                      void *output,
-                      unsigned long frame_count,
-                      const PaStreamCallbackTimeInfo *time_info,
-                      PaStreamCallbackFlags status_flags,
-                      void *user_data)
-{
-    ring_buffer_size_t readn = PaUtil_ReadRingBuffer(&g_ringbuffer[PLAYBACK_INDEX], output, frame_count);
-    if (readn < frame_count) {
-        int frame_bytes = g_output_channels * bits_per_sample / 8;
-        memset((int8_t *)output + readn * frame_bytes, 0, (frame_count - readn) * frame_bytes);
-        if (readn) {
-            printf("The playback ring buffer is empty\n");
-        }
-    }
-    PaUtil_WriteRingBuffer(&g_ringbuffer[PLAYED_INDEX], output, frame_count);
+    err = snd_pcm_hw_params_any(handle, hw_params);
+    assert(err >= 0);
 
-    return paContinue;
-}
+    err = snd_pcm_hw_params_set_access(handle, hw_params, SND_PCM_ACCESS_RW_INTERLEAVED);
+    assert(err >= 0);
 
-void *play(void *ptr)
-{
-    PaError err;
-    ring_buffer_size_t frame_count = 1600;
-    void *output = NULL;
-    int frame_bytes = g_output_channels * bits_per_sample / 8;
+    err = snd_pcm_hw_params_set_format(handle, hw_params, SND_PCM_FORMAT_S16_LE);
+    assert(err >= 0);
 
-    output = calloc(frame_count * g_output_channels, bits_per_sample / 8);
-    if (output == NULL) {
-        fprintf(stderr, "Fail to allocate memory.\n");
+    err = snd_pcm_hw_params_set_rate_near(handle, hw_params, &new_rate, 0);
+    assert(err >= 0);
+    if ((float)rate * 1.05 < new_rate || (float)rate * 0.95 > new_rate) {
+        fprintf(stderr, "sample rate %d not support\n", rate);
         exit(1);
     }
 
-    err = Pa_StartStream(g_playback_stream);
-    if (err != paNoError)
+    err = snd_pcm_hw_params_set_channels(handle, hw_params, channels);
+    assert(err >= 0);
+
+    err = snd_pcm_hw_params_get_buffer_time_max(hw_params, &buffer_time, 0);
+    assert(err >= 0);
+    if (buffer_time > 500000)
+        buffer_time = 500000;
+
+    if (buffer_time > 0)
     {
-        fprintf(stderr, "Fail to start PortAudio stream, error message is %s.\n",
-                Pa_GetErrorText(err));
+        err = snd_pcm_hw_params_set_buffer_time_near(handle, hw_params, &buffer_time, 0);
+        assert(err >= 0);
+
+        period_time = buffer_time / 4;
+        err = snd_pcm_hw_params_set_period_time_near(handle, hw_params, &period_time, 0);
+        assert(err >= 0);
+    }
+
+    err = snd_pcm_hw_params(handle, hw_params);
+    if (err < 0)
+    {
+        fprintf(stderr, "Unable to install hw params:");
+        snd_pcm_hw_params_dump(hw_params, log);
         exit(1);
     }
 
-    while (!g_is_quit) {
-        ring_buffer_size_t readn = PaUtil_ReadRingBuffer(&g_ringbuffer[PLAYBACK_INDEX], output, frame_count);
-        if (readn < frame_count) {
-            memset((int8_t *)output + readn * frame_bytes, 0, (frame_count - readn) * frame_bytes);
-            if (readn) {
-                printf("The playback ring buffer is empty\n");
+    snd_pcm_hw_params_get_period_size(hw_params, &chunk_size, 0);
+    if (chunk_size == 0)
+    {
+        chunk_size = 256;
+    }
+
+    // snd_pcm_hw_params_free(&hw_params);
+
+    return chunk_size;
+}
+
+void *playback(void *ptr)
+{
+    int err;
+    unsigned chunk_size = 0;
+    unsigned frame_bytes;
+    void *chunk = NULL;
+    snd_pcm_t *handle;
+
+    if ((err = snd_pcm_open(&handle, g_playback_device, SND_PCM_STREAM_PLAYBACK, 0)) < 0)
+    {
+        fprintf(stderr, "cannot open audio device %s (%s)\n",
+                g_playback_device,
+                snd_strerror(err));
+        exit(1);
+    }
+
+    chunk_size = set_params(handle, g_sample_rate, g_output_channels);
+
+    frame_bytes = g_output_channels * 2;
+    chunk = malloc(chunk_size * frame_bytes);
+    if (chunk == NULL)
+    {
+        fprintf(stderr, "not enough memory\n");
+        exit(1);
+    }
+
+    while (!g_is_quit)
+    {
+        ring_buffer_size_t readn = PaUtil_ReadRingBuffer(&g_ringbuffer[PLAYBACK_INDEX], chunk, chunk_size);
+        if (readn < chunk_size)
+        {
+            memset((char *)chunk + readn * frame_bytes, 0, (chunk_size - readn) * frame_bytes);
+            if (readn)
+            {
+                printf("playback ring buffer is empty\n");
             }
         }
 
-        err = Pa_WriteStream(g_playback_stream, output, frame_count);
-        if (err) {
-            fprintf(stderr, "XRUN\n");
+        size_t count = chunk_size;
+        char *data = (char *)chunk;
+        while (count > 0 && !g_is_quit)
+        {
+            ssize_t r = snd_pcm_writei(handle, data, count);
+            if (r == -EAGAIN || (r >= 0 && (size_t)r < count))
+            {
+                snd_pcm_wait(handle, 100);
+            }
+            else if (r == -EPIPE)
+            {
+                fprintf(stderr, "underrun\n");
+                exit(1);
+            }
+            else if (r < 0)
+            {
+                fprintf(stderr, "write error: %s\n", snd_strerror(r));
+                exit(1);
+            }
+            if (r > 0)
+            {
+                PaUtil_WriteRingBuffer(&g_ringbuffer[PLAYED_INDEX], data, r);
+                count -= r;
+                data += r * frame_bytes;
+            }
         }
-
-        PaUtil_WriteRingBuffer(&g_ringbuffer[PLAYED_INDEX], output, frame_count);
     }
 
-
-    Pa_StopStream(g_playback_stream);
+    snd_pcm_close(handle);
+    free(chunk);
 
     return NULL;
 }
 
-void audio_start(int capture_device, int playback_device, int sample_rate, int num_channels, int frame_count)
+void *capture(void *ptr)
 {
-    PaStreamParameters out_param;
-    PaStreamParameters in_param;
-    int frame_bytes[4];
-    int frames_per_buffer = sample_rate * 100 / 1000;   // 100 ms
+    int err;
+    unsigned chunk_size = 0;
+    unsigned frame_bytes;
+    void *chunk = NULL;
+    snd_pcm_t *handle;
 
-    g_input_channels = num_channels;
+    if ((err = snd_pcm_open(&handle, g_capture_device, SND_PCM_STREAM_CAPTURE, 0)) < 0)
+    {
+        fprintf(stderr, "cannot open audio device %s (%s)\n",
+                g_capture_device,
+                snd_strerror(err));
+        exit(1);
+    }
 
-    frame_bytes[PLAYBACK_INDEX] = g_output_channels * bits_per_sample / 8;
-    frame_bytes[PLAYED_INDEX] = g_output_channels * bits_per_sample / 8;
-    frame_bytes[CAPTURE_INDEX] = g_input_channels * bits_per_sample / 8;
-    frame_bytes[PROCESSED_INDEX] = g_input_channels * bits_per_sample / 8;
+    chunk_size = set_params(handle, g_sample_rate, g_input_channels);
 
+    frame_bytes = g_input_channels * 2;
+    chunk = malloc(chunk_size * frame_bytes);
+    if (chunk == NULL)
+    {
+        fprintf(stderr, "not enough memory\n");
+        exit(1);
+    }
 
-    for (int i=0; i<sizeof(g_ringbuffer)/sizeof(g_ringbuffer[0]); i++) {
-        void *buf = calloc(frame_count, frame_bytes[i]);
-        if (buf == NULL) {
+    while (!g_is_quit)
+    {
+        ssize_t r = snd_pcm_readi(handle, chunk, chunk_size);
+        if (r == -EAGAIN || (r >= 0 && (size_t)r < chunk_size))
+        {
+            snd_pcm_wait(handle, 100);
+        }
+        else if (r == -EPIPE)
+        {
+            fprintf(stderr, "overrun\n");
+            exit(1);
+        }
+        else if (r < 0)
+        {
+            fprintf(stderr, "read error: %s\n", snd_strerror(r));
+            exit(1);
+        }
+
+        if (r > 0) {
+            ring_buffer_size_t written =
+                PaUtil_WriteRingBuffer(&g_ringbuffer[CAPTURE_INDEX], chunk, r);
+            if (written < r)
+            {
+                printf("lost %ld frames\n", r - written);
+            }
+        }
+
+    }
+
+    snd_pcm_close(handle);
+    free(chunk);
+
+    return NULL;
+}
+
+void audio_start(int sample_rate, int channels, int ring_buffer_size)
+{
+    int err;
+    int buf_bytes[4];
+
+    g_sample_rate = sample_rate;
+    g_input_channels = channels;
+
+    buf_bytes[PLAYBACK_INDEX] = g_output_channels * bits_per_sample / 8;
+    buf_bytes[PLAYED_INDEX] = g_output_channels * bits_per_sample / 8;
+    buf_bytes[CAPTURE_INDEX] = g_input_channels * bits_per_sample / 8;
+    buf_bytes[PROCESSED_INDEX] = g_input_channels * bits_per_sample / 8;
+
+    for (int i = 0; i < sizeof(g_ringbuffer) / sizeof(g_ringbuffer[0]); i++)
+    {
+        void *buf = calloc(ring_buffer_size, buf_bytes[i]);
+        if (buf == NULL)
+        {
             fprintf(stderr, "Fail to allocate memory.\n");
             exit(1);
         }
 
-        ring_buffer_size_t ret = PaUtil_InitializeRingBuffer(&g_ringbuffer[i], frame_bytes[i], frame_count, buf);
-        if (ret == -1) {
+        ring_buffer_size_t ret = PaUtil_InitializeRingBuffer(&g_ringbuffer[i], buf_bytes[i], ring_buffer_size, buf);
+        if (ret == -1)
+        {
             fprintf(stderr, "Initialize ring buffer but element count is not a power of 2.\n");
             exit(1);
         }
     }
 
-    // Initializes PortAudio.
-    PaError err = Pa_Initialize();
-    if (err != paNoError)
-    {
-        fprintf(stderr, "Fail to initialize PortAudio, error message is %s.\n",
-                Pa_GetErrorText(err));
-        exit(1);
-    }
+    err = snd_output_stdio_attach(&log, stderr, 0);
+    assert(err >= 0);
 
-    in_param.channelCount = num_channels;
-    in_param.device = capture_device;
-    in_param.hostApiSpecificStreamInfo = NULL;
-    in_param.sampleFormat = paInt16;
-    in_param.suggestedLatency = Pa_GetDeviceInfo(capture_device)->defaultLowInputLatency;
-
-
-    out_param.channelCount = g_output_channels;
-    out_param.device = playback_device;
-    out_param.hostApiSpecificStreamInfo = NULL;
-    out_param.sampleFormat = paInt16;
-    out_param.suggestedLatency = Pa_GetDeviceInfo(playback_device)->defaultLowOutputLatency;
-
-    // PaError pa_open_ans = Pa_OpenDefaultStream(
-    //     &g_pa_stream, num_channels, 1, paInt16, sample_rate,
-    //     frames_per_buffer, audio_callback, NULL);
-
-    err = Pa_OpenStream(
-        &g_pa_stream,
-        &in_param,
-        NULL,
-        sample_rate,
-        frames_per_buffer,
-        paNoFlag,
-        audio_callback,
-        NULL);
-
-    if (err != paNoError)
-    {
-        fprintf(stderr, "Fail to open PortAudio stream, error message is %s.\n",
-                Pa_GetErrorText(err));
-        exit(1);
-    }
-
-    err = Pa_OpenStream(
-        &g_playback_stream,
-        NULL,
-        &out_param,
-        sample_rate,
-        frames_per_buffer,
-        paClipOff,
-        NULL,
-        NULL);
-
-    if (err != paNoError)
-    {
-        fprintf(stderr, "Fail to open PortAudio stream, error message is %s.\n",
-                Pa_GetErrorText(err));
-        exit(1);
-    }
-
-    pthread_create(&g_playback_thread, NULL, play, NULL);
-
-    err = Pa_StartStream(g_pa_stream);
-    if (err != paNoError)
-    {
-        fprintf(stderr, "Fail to start PortAudio stream, error message is %s.\n",
-                Pa_GetErrorText(err));
-        exit(1);
-    }
+    pthread_create(&g_playback_thread, NULL, playback, NULL);
+    pthread_create(&g_capture_thread, NULL, capture, NULL);
 }
 
 void audio_stop()
 {
-    void* ret = NULL;
-
-    Pa_StopStream(g_pa_stream);
-    Pa_CloseStream(g_pa_stream);
+    void *ret = NULL;
 
     pthread_join(g_playback_thread, &ret);
-    Pa_CloseStream(g_playback_stream);
+    pthread_join(g_capture_thread, &ret);
 
-    Pa_Terminate();
-
-    for (int i=0; i<sizeof(g_ringbuffer)/sizeof(g_ringbuffer[0]); i++) {
+    for (int i = 0; i < sizeof(g_ringbuffer) / sizeof(g_ringbuffer[0]); i++)
+    {
         free(g_ringbuffer[i].buffer);
     }
-}
-
-void audio_list()
-{
-    // Initializes PortAudio.
-    PaError err = Pa_Initialize();
-    if (err != paNoError)
-    {
-        fprintf(stderr, "Fail to initialize PortAudio, error message is %s.\n",
-                Pa_GetErrorText(err));
-        exit(1);
-    }
-
-    int num_devices = Pa_GetDeviceCount();
-    printf("-------------------------------------------------------\n");
-    printf("Index | Max Input Channels | Max Output Channels | Name\n");
-    printf("-------------------------------------------------------\n");
-    for (int i=0; i<num_devices; i++) {
-        const PaDeviceInfo *info = Pa_GetDeviceInfo(i);
-        printf("%5d | %3d | %3d | %s\n", i, info->maxInputChannels, info->maxOutputChannels, info->name);
-    }
-
-    Pa_Terminate();
 }

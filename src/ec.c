@@ -18,12 +18,12 @@ const char *usage =
     "Usage:\n %s [options]\n"
     "Options:\n"
     " -l                List audio devices' index\n"
-    " -i indev          Input device index (0)\n"
-    " -o outdev         Output device index (0)\n"
+    " -i indev          Input device (default)\n"
+    " -o outdev         Output device (default)\n"
     " -r rate           Sample rate (16000)\n"
     " -c channels       Recording channels (2)\n"
     " -b size           Buffer size (262144)\n"
-    " -d delay          System delay between output and input (1600)\n"
+    " -d delay          System delay between output and input (0)\n"
     " -f filter_length  AEC filter length (2048)\n"
     " -s                Save audio to /tmp/playback.raw, /tmp/recording.raw and /tmp/out.raw\n"
     " -D                Daemonize\n"
@@ -63,14 +63,12 @@ int main(int argc, char *argv[])
     int output_channels = 1;
     int sample_rate = 16000;
     int buffer_size = 1024 * 256;
-    int delay = 1600;
+    int delay = 0;
     int filter_length = 1024 * 2;
-    int recording_device = 0;
-    int playback_device = 0;
     int save_audio = 0;
     int daemonize = 0;
 
-    while ((opt = getopt(argc, argv, "b:c:d:Df:hi:lo:r:s")) != -1)
+    while ((opt = getopt(argc, argv, "b:c:d:Df:hi:o:r:s")) != -1)
     {
         switch (opt)
         {
@@ -93,13 +91,10 @@ int main(int argc, char *argv[])
             printf(usage, argv[0]);
             exit(0);
         case 'i':
-            recording_device = atoi(optarg);
+            g_capture_device = optarg;
             break;
-        case 'l':
-            audio_list();
-            exit(0);
         case 'o':
-            playback_device = atoi(optarg);
+            g_playback_device = optarg;
             break;
         case 'r':
             sample_rate = atoi(optarg);
@@ -111,6 +106,8 @@ int main(int argc, char *argv[])
             printf("\n");
             printf(usage, argv[0]);
             exit(1);
+        default:
+            break;
         }
     }
 
@@ -188,7 +185,7 @@ int main(int argc, char *argv[])
     echo_state = speex_echo_state_init_mc(frame_size, filter_length, input_channels, output_channels);
     speex_echo_ctl(echo_state, SPEEX_ECHO_SET_SAMPLING_RATE, &sample_rate);
 
-    audio_start(recording_device, playback_device, sample_rate, input_channels, buffer_size);
+    audio_start(sample_rate, input_channels, buffer_size);
 
     fifo_setup(&g_ringbuffer[PLAYBACK_INDEX], &g_ringbuffer[PROCESSED_INDEX]);
 
@@ -203,13 +200,13 @@ int main(int argc, char *argv[])
 
     while (!g_is_quit)
     {
-        while (PaUtil_GetRingBufferReadAvailable(&g_ringbuffer[CAPTURE_INDEX]) < frame_size)
+        while (!g_is_quit && PaUtil_GetRingBufferReadAvailable(&g_ringbuffer[CAPTURE_INDEX]) < frame_size)
         {
             Pa_Sleep(5);
         }
         PaUtil_ReadRingBuffer(&g_ringbuffer[CAPTURE_INDEX], near, frame_size);
 
-        while (PaUtil_GetRingBufferReadAvailable(&g_ringbuffer[PLAYED_INDEX]) < frame_size)
+        while (!g_is_quit && PaUtil_GetRingBufferReadAvailable(&g_ringbuffer[PLAYED_INDEX]) < frame_size)
         {
             Pa_Sleep(5);
         }
