@@ -7,7 +7,7 @@
 #include <string.h>
 #include <fcntl.h>
 #include <unistd.h>
-#include <signal.h>
+#include <pthread.h>
 
 #include <portaudio.h>
 
@@ -25,6 +25,10 @@ PaUtilRingBuffer g_ringbuffer[4];
 PaStream *g_pa_stream;
 PaStream *g_playback_stream;
 
+pthread_t g_playback_thread;
+
+extern int g_is_quit;
+
 int audio_callback(const void *input,
                       void *output,
                       unsigned long frame_count,
@@ -35,7 +39,7 @@ int audio_callback(const void *input,
     ring_buffer_size_t written =
             PaUtil_WriteRingBuffer(&g_ringbuffer[CAPTURE_INDEX], input, frame_count);
     if (written < frame_count) {
-        printf("AEC is too slow, lost %ld frames\n", frame_count - written);
+        printf("lost %ld frames\n", frame_count - written);
     }
 
     return paContinue;
@@ -61,6 +65,50 @@ int playback_callback(const void *input,
     return paContinue;
 }
 
+void *play(void *ptr)
+{
+    PaError err;
+    ring_buffer_size_t frame_count = 1600;
+    void *output = NULL;
+    int frame_bytes = g_output_channels * bits_per_sample / 8;
+
+    output = calloc(frame_count * g_output_channels, bits_per_sample / 8);
+    if (output == NULL) {
+        fprintf(stderr, "Fail to allocate memory.\n");
+        exit(1);
+    }
+
+    err = Pa_StartStream(g_playback_stream);
+    if (err != paNoError)
+    {
+        fprintf(stderr, "Fail to start PortAudio stream, error message is %s.\n",
+                Pa_GetErrorText(err));
+        exit(1);
+    }
+
+    while (!g_is_quit) {
+        ring_buffer_size_t readn = PaUtil_ReadRingBuffer(&g_ringbuffer[PLAYBACK_INDEX], output, frame_count);
+        if (readn < frame_count) {
+            memset((int8_t *)output + readn * frame_bytes, 0, (frame_count - readn) * frame_bytes);
+            if (readn) {
+                printf("The playback ring buffer is empty\n");
+            }
+        }
+
+        err = Pa_WriteStream(g_playback_stream, output, frame_count);
+        if (err) {
+            fprintf(stderr, "XRUN\n");
+        }
+
+        PaUtil_WriteRingBuffer(&g_ringbuffer[PLAYED_INDEX], output, frame_count);
+    }
+
+
+    Pa_StopStream(g_playback_stream);
+
+    return NULL;
+}
+
 void audio_start(int capture_device, int playback_device, int sample_rate, int num_channels, int frame_count)
 {
     PaStreamParameters out_param;
@@ -83,15 +131,19 @@ void audio_start(int capture_device, int playback_device, int sample_rate, int n
             exit(1);
         }
 
-        PaUtil_InitializeRingBuffer(&g_ringbuffer[i], frame_bytes[i], frame_count, buf);
+        ring_buffer_size_t ret = PaUtil_InitializeRingBuffer(&g_ringbuffer[i], frame_bytes[i], frame_count, buf);
+        if (ret == -1) {
+            fprintf(stderr, "Initialize ring buffer but element count is not a power of 2.\n");
+            exit(1);
+        }
     }
 
     // Initializes PortAudio.
-    PaError pa_init_ans = Pa_Initialize();
-    if (pa_init_ans != paNoError)
+    PaError err = Pa_Initialize();
+    if (err != paNoError)
     {
         fprintf(stderr, "Fail to initialize PortAudio, error message is %s.\n",
-                Pa_GetErrorText(pa_init_ans));
+                Pa_GetErrorText(err));
         exit(1);
     }
 
@@ -112,7 +164,7 @@ void audio_start(int capture_device, int playback_device, int sample_rate, int n
     //     &g_pa_stream, num_channels, 1, paInt16, sample_rate,
     //     frames_per_buffer, audio_callback, NULL);
 
-    PaError pa_open_ans = Pa_OpenStream(
+    err = Pa_OpenStream(
         &g_pa_stream,
         &in_param,
         NULL,
@@ -122,54 +174,51 @@ void audio_start(int capture_device, int playback_device, int sample_rate, int n
         audio_callback,
         NULL);
 
-    if (pa_open_ans != paNoError)
+    if (err != paNoError)
     {
         fprintf(stderr, "Fail to open PortAudio stream, error message is %s.\n",
-                Pa_GetErrorText(pa_open_ans));
+                Pa_GetErrorText(err));
         exit(1);
     }
 
-    pa_open_ans = Pa_OpenStream(
+    err = Pa_OpenStream(
         &g_playback_stream,
         NULL,
         &out_param,
         sample_rate,
         frames_per_buffer,
-        paNoFlag,
-        playback_callback,
+        paClipOff,
+        NULL,
         NULL);
 
-    if (pa_open_ans != paNoError)
+    if (err != paNoError)
     {
         fprintf(stderr, "Fail to open PortAudio stream, error message is %s.\n",
-                Pa_GetErrorText(pa_open_ans));
+                Pa_GetErrorText(err));
         exit(1);
     }
 
-    PaError pa_stream_start_ans = Pa_StartStream(g_playback_stream);
-    if (pa_stream_start_ans != paNoError)
-    {
-        fprintf(stderr, "Fail to start PortAudio stream, error message is %s.\n",
-                Pa_GetErrorText(pa_stream_start_ans));
-        exit(1);
-    }
+    pthread_create(&g_playback_thread, NULL, play, NULL);
 
-    pa_stream_start_ans = Pa_StartStream(g_pa_stream);
-    if (pa_stream_start_ans != paNoError)
+    err = Pa_StartStream(g_pa_stream);
+    if (err != paNoError)
     {
         fprintf(stderr, "Fail to start PortAudio stream, error message is %s.\n",
-                Pa_GetErrorText(pa_stream_start_ans));
+                Pa_GetErrorText(err));
         exit(1);
     }
 }
 
 void audio_stop()
 {
-    Pa_StopStream(g_playback_stream);
-    Pa_CloseStream(g_playback_stream);
+    void* ret = NULL;
 
     Pa_StopStream(g_pa_stream);
     Pa_CloseStream(g_pa_stream);
+
+    pthread_join(g_playback_thread, &ret);
+    Pa_CloseStream(g_playback_stream);
+
     Pa_Terminate();
 
     for (int i=0; i<sizeof(g_ringbuffer)/sizeof(g_ringbuffer[0]); i++) {
@@ -180,11 +229,11 @@ void audio_stop()
 void audio_list()
 {
     // Initializes PortAudio.
-    PaError pa_init_ans = Pa_Initialize();
-    if (pa_init_ans != paNoError)
+    PaError err = Pa_Initialize();
+    if (err != paNoError)
     {
         fprintf(stderr, "Fail to initialize PortAudio, error message is %s.\n",
-                Pa_GetErrorText(pa_init_ans));
+                Pa_GetErrorText(err));
         exit(1);
     }
 
