@@ -24,20 +24,19 @@ make
 + PulseAudio, use [module-pipe-sink](https://www.freedesktop.org/wiki/Software/PulseAudio/Documentation/User/Modules/#index1h3) and [module-pipe-source](https://www.freedesktop.org/wiki/Software/PulseAudio/Documentation/User/Modules/#index2h3)
 
 ### Usage
-1. Run `ec -h` to show its command line options
-2. Run `ec -l` to get audio devices' index
-3. Select audio input/output devices `ec -i {input device index} -o {output device index} -c {input channels}`
+1. Run `./ec -h` to show its command line options
+2. Run `arecord -L` and `aplay -L` to get audio devices' name
+3. Select audio input/output devices `./ec -i {input device name} -o {output device name} -c {input channels}`
 
 ```
-ec -h
-ec -l
-ec -i 0 -o 0 -s
+./ec -h
+./ec -i plughw:1 -o plughw:1 -s
 ```
 
 ### Hardware
 + ReSpeaker 2 Mic Hat for Raspberry Pi
 
-  The system delay between ALSA `playback` device and ALSA `capture` device is about 5900 / 16000 second
+  The delay between playback and recording is about 200. `./ec -i plughw:1 -o plughw:1 -d 200`
 
 ### License
 GPL V3
