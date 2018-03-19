@@ -7,7 +7,6 @@
 #include <unistd.h>
 #include <pthread.h>
 
-#include <pa_util.h>
 #include <pa_ringbuffer.h>
 
 
@@ -37,10 +36,10 @@ void *fifo_read(void *ptr)
             if (result > 0) {
                 PaUtil_AdvanceRingBufferWriteIndex(ringbuffer, result / ringbuffer->elementSizeBytes);
             } else {
-                Pa_Sleep(1000);
+                sleep(1);
             }
         } else {
-            Pa_Sleep(100);
+            usleep(100000);
         }
     }
 
@@ -72,10 +71,10 @@ void *fifo_write(void *ptr)
             if (result > 0) {
                 PaUtil_AdvanceRingBufferReadIndex(ringbuffer, result / ringbuffer->elementSizeBytes);
             } else {
-                Pa_Sleep(1000);
+                sleep(1);
             }
         } else {
-            Pa_Sleep(100);
+            usleep(100000);
         }
     }
 

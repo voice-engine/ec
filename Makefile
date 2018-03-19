@@ -1,13 +1,14 @@
 CC :=
 CXX :=
-LDFLAGS :=
 LDLIBS := 
 PORTAUDIOINC := portaudio/install/include
 PORTAUDIOLIBS := portaudio/install/lib/libportaudio.a
 SRCDIR := src
 
-CFLAGS :=
-CXXFLAGS += -D_GLIBCXX_USE_CXX11_ABI=0
+
+LDFLAGS := -g
+CFLAGS := -g
+CXXFLAGS += -g
 
 ifeq ($(shell uname), Darwin)
   # By default Mac uses clang++ as g++, but people may have changed their
@@ -23,11 +24,11 @@ ifeq ($(shell uname), Darwin)
 else ifeq ($(shell uname), Linux)
   CC := gcc
   CXX := g++
-  CFLAGS += -I$(SRCDIR) -Wall -I$(PORTAUDIOINC)
+  CFLAGS += -I$(SRCDIR) -Wall
   CXXFLAGS += -I$(SRCDIR) -std=c++0x -Wall -Wno-sign-compare \
       -Wno-unused-local-typedefs -Winit-self -rdynamic \
-      -DHAVE_POSIX_MEMALIGN -I$(PORTAUDIOINC)
-  LDLIBS += -ldl -lm -Wl,-Bstatic -Wl,-Bdynamic -lrt -lpthread $(PORTAUDIOLIBS)\
+      -DHAVE_POSIX_MEMALIGN
+  LDLIBS += -ldl -lm -Wl,-Bstatic -Wl,-Bdynamic -lrt -lpthread \
       -lasound $(shell pkg-config --libs speexdsp)
 endif
 
@@ -43,7 +44,7 @@ CXXFLAGS += -O3
 
 BINFILE = ec
 
-OBJFILES = src/ec.o src/audio.o src/fifo.o
+OBJFILES = src/ec.o src/audio.o src/fifo.o src/pa_ringbuffer.o
 
 all: $(BINFILE)
 
@@ -51,8 +52,8 @@ all: $(BINFILE)
 	$(MAKE) -C ${@D} ${@F}
 
 # We have to use the C++ compiler to link.
-$(BINFILE): $(PORTAUDIOLIBS)  $(OBJFILES)
-	$(CXX) $(OBJFILES) $(PORTAUDIOLIBS) $(LDLIBS) -o $(BINFILE)
+$(BINFILE): $(OBJFILES)
+	$(CXX) $(OBJFILES) $(LDLIBS) -o $(BINFILE)
 
 $(PORTAUDIOLIBS):
 	@-./install_portaudio.sh

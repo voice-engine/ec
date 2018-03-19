@@ -194,7 +194,7 @@ int main(int argc, char *argv[])
     // system delay between recording and playback
     while (PaUtil_GetRingBufferReadAvailable(&g_ringbuffer[CAPTURE_INDEX]) < delay)
     {
-        Pa_Sleep(5);
+        usleep(5000);
     }
     PaUtil_AdvanceRingBufferReadIndex(&g_ringbuffer[CAPTURE_INDEX], delay);
 
@@ -202,13 +202,13 @@ int main(int argc, char *argv[])
     {
         while (!g_is_quit && PaUtil_GetRingBufferReadAvailable(&g_ringbuffer[CAPTURE_INDEX]) < frame_size)
         {
-            Pa_Sleep(5);
+            usleep(5000);
         }
         PaUtil_ReadRingBuffer(&g_ringbuffer[CAPTURE_INDEX], near, frame_size);
 
         while (!g_is_quit && PaUtil_GetRingBufferReadAvailable(&g_ringbuffer[PLAYED_INDEX]) < frame_size)
         {
-            Pa_Sleep(5);
+            usleep(5000);
         }
         PaUtil_ReadRingBuffer(&g_ringbuffer[PLAYED_INDEX], far, frame_size);
 
