@@ -22,7 +22,7 @@ void *fifo_read(void *ptr)
     PaUtilRingBuffer *ringbuffer = ptr;
     int fd = open(playback_fifo, O_RDONLY);
     if (fd < 0) {
-        printf("failed to open %s, error %d\n", capture_fifo, fd);
+        printf("failed to open %s, error %d\n", playback_fifo, fd);
         return NULL;
     }
 
@@ -103,7 +103,7 @@ int fifo_setup(PaUtilRingBuffer *playback, PaUtilRingBuffer *capture)
         mkfifo(capture_fifo, 0666);
     }
 
-    pthread_create(&reader, NULL, fifo_read, playback);
+    // pthread_create(&reader, NULL, fifo_read, playback);
     pthread_create(&writer, NULL, fifo_write, capture);
 
     return 0;

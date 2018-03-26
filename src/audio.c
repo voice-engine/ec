@@ -1,5 +1,7 @@
 // audio.c
 
+#define _GNU_SOURCE
+
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,12 +25,15 @@ PaUtilRingBuffer g_ringbuffer[4];
 char *g_playback_device = "default";
 char *g_capture_device = "default";
 
+
+
 static pthread_t g_playback_thread;
 static pthread_t g_capture_thread;
 
 static snd_output_t *log;
 
 extern int g_is_quit;
+extern char *playback_fifo;
 
 unsigned set_params(snd_pcm_t *handle, unsigned rate, unsigned channels)
 {
@@ -99,9 +104,32 @@ void *playback(void *ptr)
 {
     int err;
     unsigned chunk_size = 0;
+    unsigned chunk_bytes;
     unsigned frame_bytes;
     void *chunk = NULL;
     snd_pcm_t *handle;
+
+    int fd = open(playback_fifo, O_RDONLY | O_NONBLOCK);
+    if (fd < 0) {
+        fprintf(stderr, "failed to open %s, error %d\n", playback_fifo, fd);
+        exit(1);
+    }
+    long pipe_size = (long)fcntl(fd, F_GETPIPE_SZ);
+    if (pipe_size == -1) {
+        perror("get pipe size failed.");
+    }
+    printf("default pipe size: %ld\n", pipe_size);
+
+    int ret = fcntl(fd, F_SETPIPE_SZ, 1024 * 2);
+    if (ret < 0) {
+        perror("set pipe size failed.");
+    }
+
+    pipe_size = (long)fcntl(fd, F_GETPIPE_SZ);
+    if (pipe_size == -1) {
+        perror("get pipe size 2 failed.");
+    }
+    printf("new pipe size: %ld\n", pipe_size);
 
     if ((err = snd_pcm_open(&handle, g_playback_device, SND_PCM_STREAM_PLAYBACK, 0)) < 0)
     {
@@ -114,7 +142,8 @@ void *playback(void *ptr)
     chunk_size = set_params(handle, g_sample_rate, g_output_channels);
 
     frame_bytes = g_output_channels * 2;
-    chunk = malloc(chunk_size * frame_bytes);
+    chunk_bytes = chunk_size * frame_bytes;
+    chunk = malloc(chunk_bytes);
     if (chunk == NULL)
     {
         fprintf(stderr, "not enough memory\n");
@@ -123,15 +152,28 @@ void *playback(void *ptr)
 
     while (!g_is_quit)
     {
-        ring_buffer_size_t readn = PaUtil_ReadRingBuffer(&g_ringbuffer[PLAYBACK_INDEX], chunk, chunk_size);
-        if (readn < chunk_size)
-        {
-            memset((char *)chunk + readn * frame_bytes, 0, (chunk_size - readn) * frame_bytes);
-            if (readn)
-            {
-                printf("playback ring buffer is empty\n");
+        int result = read(fd, chunk, chunk_bytes);
+        if (result < 0) {
+            fprintf(stderr, "read() failed %d\n", result);
+            exit(1);
+        } else if (result < chunk_bytes) {
+            memset((char *)chunk + result, 0, chunk_bytes - result);
+            if (result) {
+                printf("get %d of %d\n", result, chunk_bytes);
             }
         }
+
+        
+
+        // ring_buffer_size_t readn = PaUtil_ReadRingBuffer(&g_ringbuffer[PLAYBACK_INDEX], chunk, chunk_size);
+        // if (readn < chunk_size)
+        // {
+        //     memset((char *)chunk + readn * frame_bytes, 0, (chunk_size - readn) * frame_bytes);
+        //     if (readn)
+        //     {
+        //         printf("playback ring buffer is empty\n");
+        //     }
+        // }
 
         size_t count = chunk_size;
         char *data = (char *)chunk;
