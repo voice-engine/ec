@@ -20,7 +20,26 @@ make
 ```
 
 ### Configuration
-+ ALSA, use [File plugin](https://www.alsa-project.org/alsa-doc/alsa-lib/pcm_plugins.html)
++ ALSA, use [File plugin](https://www.alsa-project.org/alsa-doc/alsa-lib/pcm_plugins.html) to configure `ec` as the default ALSA output:
+
+  ```
+  pcm.!default pcm.ec
+
+  pcm.ec {
+      type plug
+      slave {
+          format S16_LE
+          rate 16000
+          channels 1
+          pcm {
+              type file
+              slave.pcm null
+              file "/tmp/ec.input"
+              format "raw"
+          }
+      }
+  }
+  ```
 
 + PulseAudio, use [module-pipe-sink](https://www.freedesktop.org/wiki/Software/PulseAudio/Documentation/User/Modules/#index1h3) and [module-pipe-source](https://www.freedesktop.org/wiki/Software/PulseAudio/Documentation/User/Modules/#index2h3)
 
@@ -30,14 +49,23 @@ make
 3. Select audio input/output devices `./ec -i {input device name} -o {output device name} -c {input channels}`
 
 ```
+# terminal #1, run ec
 ./ec -h
 ./ec -i plughw:1 -o plughw:1 -s
+
+# terminal #2, play 16k fs, 16 bits, 1 channel raw audio
+cat 16k_s16le_mono_audio.raw > /tmp/ec.input
+
+# terminal #3, record
+cat /tmp/ec.output > 16k_s16le_stereo_audio.raw 
 ```
 
 ### Hardware
+>The sound from the on-board audio jack of the Raspberry Pi has serious distortion, do not use the on-board audio jack!
+
 + ReSpeaker 2 Mic Hat for Raspberry Pi
 
-  The delay between playback and recording is about 200. `./ec -i plughw:1 -o plughw:1 -d 200`
+  The delay between playback and recording is about 200. Try `./ec -i plughw:1 -o plughw:1 -d 200`
 
 ### License
 GPL V3
