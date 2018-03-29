@@ -62,7 +62,7 @@ int main(int argc, char *argv[])
     int input_channels = 2;
     int output_channels = 1;
     int sample_rate = 16000;
-    int buffer_size = 1024 * 256;
+    int buffer_size = 1024 * 16;
     int delay = 0;
     int filter_length = 1024 * 2;
     int save_audio = 0;
@@ -185,16 +185,18 @@ int main(int argc, char *argv[])
     echo_state = speex_echo_state_init_mc(frame_size, filter_length, input_channels, output_channels);
     speex_echo_ctl(echo_state, SPEEX_ECHO_SET_SAMPLING_RATE, &sample_rate);
 
-    audio_start(sample_rate, input_channels, buffer_size);
-
     fifo_setup(&g_ringbuffer[PLAYBACK_INDEX], &g_ringbuffer[PROCESSED_INDEX]);
 
+    audio_start(sample_rate, input_channels, buffer_size);
+
     printf("Running... Press Ctrl+C to exit\n");
+
+    int wait_us = frame_size * 1000000 / sample_rate / 2;
 
     // system delay between recording and playback
     while (PaUtil_GetRingBufferReadAvailable(&g_ringbuffer[CAPTURE_INDEX]) < delay)
     {
-        usleep(5000);
+        usleep(wait_us);
     }
     PaUtil_AdvanceRingBufferReadIndex(&g_ringbuffer[CAPTURE_INDEX], delay);
 
@@ -202,13 +204,13 @@ int main(int argc, char *argv[])
     {
         while (!g_is_quit && PaUtil_GetRingBufferReadAvailable(&g_ringbuffer[CAPTURE_INDEX]) < frame_size)
         {
-            usleep(5000);
+            usleep(wait_us);
         }
         PaUtil_ReadRingBuffer(&g_ringbuffer[CAPTURE_INDEX], near, frame_size);
 
         while (!g_is_quit && PaUtil_GetRingBufferReadAvailable(&g_ringbuffer[PLAYED_INDEX]) < frame_size)
         {
-            usleep(5000);
+            usleep(wait_us);
         }
         PaUtil_ReadRingBuffer(&g_ringbuffer[PLAYED_INDEX], far, frame_size);
 

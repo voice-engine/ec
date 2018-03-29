@@ -48,14 +48,13 @@ unsigned up2(unsigned v)
     return v;
 }
 
-unsigned set_params(snd_pcm_t *handle, unsigned rate, unsigned channels)
+int set_params(snd_pcm_t *handle, unsigned rate, unsigned channels, unsigned chunk_size)
 {
     int err;
-    unsigned buffer_time = 0;
-    unsigned period_time = 0;
-    unsigned long chunk_size = 0;
     snd_pcm_hw_params_t *hw_params;
     unsigned new_rate = rate;
+    // unsigned buffer_time = 0;
+    // unsigned period_time = 0;
 
     err = snd_pcm_hw_params_malloc(&hw_params);
     assert(err >= 0);
@@ -80,20 +79,27 @@ unsigned set_params(snd_pcm_t *handle, unsigned rate, unsigned channels)
     err = snd_pcm_hw_params_set_channels(handle, hw_params, channels);
     assert(err >= 0);
 
-    err = snd_pcm_hw_params_get_buffer_time_max(hw_params, &buffer_time, 0);
+    // err = snd_pcm_hw_params_get_buffer_time_max(hw_params, &buffer_time, 0);
+    // assert(err >= 0);
+
+    // if (buffer_time > 500000)
+    //     buffer_time = 500000;
+
+    // if (buffer_time > 0)
+    // {
+    //     err = snd_pcm_hw_params_set_buffer_time_near(handle, hw_params, &buffer_time, 0);
+    //     assert(err >= 0);
+
+    //     period_time = buffer_time / 4;
+    //     err = snd_pcm_hw_params_set_period_time_near(handle, hw_params, &period_time, 0);
+    //     assert(err >= 0);
+    // }
+    
+    err = snd_pcm_hw_params_set_buffer_size(handle, hw_params, chunk_size * 2);
     assert(err >= 0);
-    if (buffer_time > 500000)
-        buffer_time = 500000;
 
-    if (buffer_time > 0)
-    {
-        err = snd_pcm_hw_params_set_buffer_time_near(handle, hw_params, &buffer_time, 0);
-        assert(err >= 0);
-
-        period_time = buffer_time / 4;
-        err = snd_pcm_hw_params_set_period_time_near(handle, hw_params, &period_time, 0);
-        assert(err >= 0);
-    }
+    err = snd_pcm_hw_params_set_period_size(handle, hw_params, chunk_size, 0);
+    assert(err >= 0);
 
     err = snd_pcm_hw_params(handle, hw_params);
     if (err < 0)
@@ -103,25 +109,19 @@ unsigned set_params(snd_pcm_t *handle, unsigned rate, unsigned channels)
         exit(1);
     }
 
-    snd_pcm_hw_params_get_period_size(hw_params, &chunk_size, 0);
-    if (chunk_size == 0)
-    {
-        chunk_size = 256;
-    }
-
     // snd_pcm_hw_params_free(&hw_params);
 
-    return chunk_size;
+    return 0;
 }
 
 void *playback(void *ptr)
 {
     int err;
-    unsigned chunk_size = 0;
     unsigned chunk_bytes;
     unsigned frame_bytes;
     char *chunk = NULL;
     snd_pcm_t *handle;
+    unsigned chunk_size = 512;
 
     if ((err = snd_pcm_open(&handle, g_playback_device, SND_PCM_STREAM_PLAYBACK, 0)) < 0)
     {
@@ -131,9 +131,7 @@ void *playback(void *ptr)
         exit(1);
     }
 
-    chunk_size = set_params(handle, g_sample_rate, g_output_channels);
-
-    printf("chunk_size = %d\n", chunk_size);
+    set_params(handle, g_sample_rate, g_output_channels, chunk_size);
 
     frame_bytes = g_output_channels * 2;
     chunk_bytes = chunk_size * frame_bytes;
@@ -170,11 +168,12 @@ void *playback(void *ptr)
     }
     printf("new pipe size: %ld\n", pipe_size);
 
+    int wait_us = chunk_size * 1000000 / g_sample_rate / 4;
     while (!g_is_quit)
     {
         int count = 0;
 
-        for (int i=0; i<3; i++) {
+        for (int i=0; i<2; i++) {
             int result = read(fd, chunk + count, chunk_bytes - count);
             if (result < 0)
             {
@@ -186,13 +185,12 @@ void *playback(void *ptr)
             } else {
                 count += result;
             }
-
             
             if (count >= chunk_bytes) {
                 break;
             }
 
-            usleep(1000);
+            usleep(wait_us);
         }
 
         
@@ -252,10 +250,10 @@ void *playback(void *ptr)
 void *capture(void *ptr)
 {
     int err;
-    unsigned chunk_size = 0;
     unsigned frame_bytes;
     void *chunk = NULL;
     snd_pcm_t *handle;
+    unsigned chunk_size = 512;
 
     if ((err = snd_pcm_open(&handle, g_capture_device, SND_PCM_STREAM_CAPTURE, 0)) < 0)
     {
@@ -265,7 +263,7 @@ void *capture(void *ptr)
         exit(1);
     }
 
-    chunk_size = set_params(handle, g_sample_rate, g_input_channels);
+    set_params(handle, g_sample_rate, g_input_channels, chunk_size);
 
     frame_bytes = g_input_channels * 2;
     chunk = malloc(chunk_size * frame_bytes);

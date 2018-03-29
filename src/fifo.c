@@ -85,7 +85,7 @@ void *fifo_write(void *ptr)
 
 int fifo_setup(PaUtilRingBuffer *playback, PaUtilRingBuffer *capture)
 {
-    pthread_t reader;
+    // pthread_t reader;
     pthread_t writer;
     struct stat st;
 
