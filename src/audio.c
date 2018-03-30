@@ -121,7 +121,7 @@ void *playback(void *ptr)
     unsigned frame_bytes;
     char *chunk = NULL;
     snd_pcm_t *handle;
-    unsigned chunk_size = 512;
+    unsigned chunk_size = 1024;
 
     if ((err = snd_pcm_open(&handle, g_playback_device, SND_PCM_STREAM_PLAYBACK, 0)) < 0)
     {
@@ -155,7 +155,7 @@ void *playback(void *ptr)
     }
     printf("default pipe size: %ld\n", pipe_size);
 
-    int ret = fcntl(fd, F_SETPIPE_SZ, chunk_bytes * 2);
+    int ret = fcntl(fd, F_SETPIPE_SZ, chunk_bytes * 4);
     if (ret < 0)
     {
         perror("set pipe size failed.");
@@ -253,7 +253,7 @@ void *capture(void *ptr)
     unsigned frame_bytes;
     void *chunk = NULL;
     snd_pcm_t *handle;
-    unsigned chunk_size = 512;
+    unsigned chunk_size = 1024;
 
     if ((err = snd_pcm_open(&handle, g_capture_device, SND_PCM_STREAM_CAPTURE, 0)) < 0)
     {
