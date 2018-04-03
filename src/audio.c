@@ -11,28 +11,19 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <error.h>
+#include <sys/stat.h>
 
 #include <alsa/asoundlib.h>
 
-#include <audio.h>
+#include "audio.h"
+#include "conf.h"
 
-const unsigned bits_per_sample = 16;  // only support 16 bits sample width
-const unsigned g_output_channels = 1; // only support mono output
-unsigned g_input_channels = 2;
-unsigned g_sample_rate = 16000;
-
-PaUtilRingBuffer g_ringbuffer[4];
-
-char *g_playback_device = "default";
-char *g_capture_device = "default";
+PaUtilRingBuffer g_ringbuffer[3];
 
 static pthread_t g_playback_thread;
 static pthread_t g_capture_thread;
 
-static snd_output_t *log;
-
 extern int g_is_quit;
-extern char *playback_fifo;
 
 // from http://graphics.stanford.edu/~seander/bithacks.html#RoundUpPowerOf2
 unsigned up2(unsigned v)
@@ -53,8 +44,6 @@ int set_params(snd_pcm_t *handle, unsigned rate, unsigned channels, unsigned chu
     int err;
     snd_pcm_hw_params_t *hw_params;
     unsigned new_rate = rate;
-    // unsigned buffer_time = 0;
-    // unsigned period_time = 0;
 
     err = snd_pcm_hw_params_malloc(&hw_params);
     assert(err >= 0);
@@ -79,22 +68,6 @@ int set_params(snd_pcm_t *handle, unsigned rate, unsigned channels, unsigned chu
     err = snd_pcm_hw_params_set_channels(handle, hw_params, channels);
     assert(err >= 0);
 
-    // err = snd_pcm_hw_params_get_buffer_time_max(hw_params, &buffer_time, 0);
-    // assert(err >= 0);
-
-    // if (buffer_time > 500000)
-    //     buffer_time = 500000;
-
-    // if (buffer_time > 0)
-    // {
-    //     err = snd_pcm_hw_params_set_buffer_time_near(handle, hw_params, &buffer_time, 0);
-    //     assert(err >= 0);
-
-    //     period_time = buffer_time / 4;
-    //     err = snd_pcm_hw_params_set_period_time_near(handle, hw_params, &period_time, 0);
-    //     assert(err >= 0);
-    // }
-    
     err = snd_pcm_hw_params_set_buffer_size(handle, hw_params, chunk_size * 2);
     assert(err >= 0);
 
@@ -105,7 +78,6 @@ int set_params(snd_pcm_t *handle, unsigned rate, unsigned channels, unsigned chu
     if (err < 0)
     {
         fprintf(stderr, "Unable to install hw params:");
-        snd_pcm_hw_params_dump(hw_params, log);
         exit(1);
     }
 
@@ -122,18 +94,20 @@ void *playback(void *ptr)
     char *chunk = NULL;
     snd_pcm_t *handle;
     unsigned chunk_size = 1024;
+    unsigned zero_count = 0;
+    conf_t *conf = (conf_t *)ptr;
 
-    if ((err = snd_pcm_open(&handle, g_playback_device, SND_PCM_STREAM_PLAYBACK, 0)) < 0)
+    if ((err = snd_pcm_open(&handle, conf->out_pcm, SND_PCM_STREAM_PLAYBACK, 0)) < 0)
     {
         fprintf(stderr, "cannot open audio device %s (%s)\n",
-                g_playback_device,
+                conf->out_pcm,
                 snd_strerror(err));
         exit(1);
     }
 
-    set_params(handle, g_sample_rate, g_output_channels, chunk_size);
+    set_params(handle, conf->rate, conf->out_channels, chunk_size);
 
-    frame_bytes = g_output_channels * 2;
+    frame_bytes = conf->out_channels * 2;
     chunk_bytes = chunk_size * frame_bytes;
     chunk = (char *)malloc(chunk_bytes);
     if (chunk == NULL)
@@ -142,10 +116,19 @@ void *playback(void *ptr)
         exit(1);
     }
 
-    int fd = open(playback_fifo, O_RDONLY | O_NONBLOCK);
+    struct stat st;
+
+    if (stat(conf->playback_fifo, &st) != 0) {
+        mkfifo(conf->playback_fifo, 0666);
+    } else if (!S_ISFIFO(st.st_mode)) {
+        remove(conf->playback_fifo);
+        mkfifo(conf->playback_fifo, 0666);
+    }
+
+    int fd = open(conf->playback_fifo, O_RDONLY | O_NONBLOCK);
     if (fd < 0)
     {
-        fprintf(stderr, "failed to open %s, error %d\n", playback_fifo, fd);
+        fprintf(stderr, "failed to open %s, error %d\n", conf->playback_fifo, fd);
         exit(1);
     }
     long pipe_size = (long)fcntl(fd, F_GETPIPE_SZ);
@@ -168,12 +151,13 @@ void *playback(void *ptr)
     }
     printf("new pipe size: %ld\n", pipe_size);
 
-    int wait_us = chunk_size * 1000000 / g_sample_rate / 4;
+    int wait_us = chunk_size * 1000000 / conf->rate / 4;
     while (!g_is_quit)
     {
         int count = 0;
 
-        for (int i=0; i<2; i++) {
+        for (int i = 0; i < 2; i++)
+        {
             int result = read(fd, chunk + count, chunk_bytes - count);
             if (result < 0)
             {
@@ -181,25 +165,54 @@ void *playback(void *ptr)
                 {
                     fprintf(stderr, "read() returned %d, errno = %d\n", result, errno);
                     exit(1);
-                } 
-            } else {
+                }
+            }
+            else
+            {
                 count += result;
             }
-            
-            if (count >= chunk_bytes) {
+
+            if (count >= chunk_bytes)
+            {
                 break;
             }
 
             usleep(wait_us);
         }
 
-        
         if (count < chunk_bytes)
         {
             memset(chunk + count, 0, chunk_bytes - count);
+
             if (count)
             {
-                printf("get %d of %d\n", count, chunk_bytes);
+                printf("playback filled %d bytes zero\n", chunk_bytes - count);
+            }
+        }
+
+        if (0 == count)
+        {
+            // bypass AEC when no playback
+            if (zero_count > (conf->filter_length + conf->buffer_size))
+            {
+                if (!conf->bypass)
+                {
+                    conf->bypass = 1;
+                    printf("No playback, bypass AEC\n");
+                }
+            }
+            else
+            {
+                zero_count += chunk_size;
+            }
+        }
+        else
+        {
+            if (conf->bypass)
+            {
+                conf->bypass = 0;
+                zero_count = 0;
+                printf("Enable AEC\n");
             }
         }
 
@@ -254,18 +267,19 @@ void *capture(void *ptr)
     void *chunk = NULL;
     snd_pcm_t *handle;
     unsigned chunk_size = 1024;
+    conf_t *conf = (conf_t *)ptr;
 
-    if ((err = snd_pcm_open(&handle, g_capture_device, SND_PCM_STREAM_CAPTURE, 0)) < 0)
+    if ((err = snd_pcm_open(&handle, conf->rec_pcm, SND_PCM_STREAM_CAPTURE, 0)) < 0)
     {
         fprintf(stderr, "cannot open audio device %s (%s)\n",
-                g_capture_device,
+                conf->rec_pcm,
                 snd_strerror(err));
         exit(1);
     }
 
-    set_params(handle, g_sample_rate, g_input_channels, chunk_size);
+    set_params(handle, conf->rate, conf->rec_channels, chunk_size);
 
-    frame_bytes = g_input_channels * 2;
+    frame_bytes = conf->rec_channels * 2;
     chunk = malloc(chunk_size * frame_bytes);
     if (chunk == NULL)
     {
@@ -308,20 +322,15 @@ void *capture(void *ptr)
     return NULL;
 }
 
-void audio_start(int sample_rate, int channels, int ring_buffer_size)
+void audio_start(conf_t *conf)
 {
-    int err;
-    int buf_bytes[4];
+    int buf_bytes[3];
 
-    ring_buffer_size = up2(ring_buffer_size);
+    unsigned ring_buffer_size = up2(conf->buffer_size);
 
-    g_sample_rate = sample_rate;
-    g_input_channels = channels;
-
-    buf_bytes[PLAYBACK_INDEX] = g_output_channels * bits_per_sample / 8;
-    buf_bytes[PLAYED_INDEX] = g_output_channels * bits_per_sample / 8;
-    buf_bytes[CAPTURE_INDEX] = g_input_channels * bits_per_sample / 8;
-    buf_bytes[PROCESSED_INDEX] = g_input_channels * bits_per_sample / 8;
+    buf_bytes[PLAYED_INDEX] = conf->out_channels * conf->bits_per_sample / 8;
+    buf_bytes[CAPTURE_INDEX] = conf->rec_channels * conf->bits_per_sample / 8;
+    buf_bytes[PROCESSED_INDEX] = conf->rec_channels * conf->bits_per_sample / 8;
 
     for (int i = 0; i < sizeof(g_ringbuffer) / sizeof(g_ringbuffer[0]); i++)
     {
@@ -340,11 +349,8 @@ void audio_start(int sample_rate, int channels, int ring_buffer_size)
         }
     }
 
-    err = snd_output_stdio_attach(&log, stderr, 0);
-    assert(err >= 0);
-
-    pthread_create(&g_playback_thread, NULL, playback, NULL);
-    pthread_create(&g_capture_thread, NULL, capture, NULL);
+    pthread_create(&g_playback_thread, NULL, playback, conf);
+    pthread_create(&g_capture_thread, NULL, capture, conf);
 }
 
 void audio_stop()

@@ -8,11 +8,13 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <signal.h>
+#include <errno.h>
 #include <sys/stat.h>
 
 #include <speex/speex_echo.h>
 
-#include <audio.h>
+#include "conf.h"
+#include "audio.h"
 
 const char *usage =
     "Usage:\n %s [options]\n"
@@ -35,10 +37,7 @@ const char *usage =
 
 volatile int g_is_quit = 0;
 
-extern char *playback_fifo;
-extern char *capture_fifo;
-
-extern int fifo_setup(PaUtilRingBuffer *playback, PaUtilRingBuffer *capture);
+extern int fifo_setup(PaUtilRingBuffer *capture);
 
 void int_handler(int signal)
 {
@@ -50,32 +49,41 @@ void int_handler(int signal)
 int main(int argc, char *argv[])
 {
     SpeexEchoState *echo_state;
-    int16_t *near = NULL;
+    int16_t *rec = NULL;
     int16_t *far = NULL;
     int16_t *out = NULL;
-    FILE *fp_near = NULL;
+    FILE *fp_rec = NULL;
     FILE *fp_far = NULL;
     FILE *fp_out = NULL;
 
     int opt = 0;
-    int input_channels = 2;
-    int output_channels = 1;
-    int sample_rate = 16000;
-    int buffer_size = 1024 * 16;
     int delay = 0;
-    int filter_length = 1024 * 2;
     int save_audio = 0;
     int daemonize = 0;
+
+    conf_t config = {
+        .rec_pcm = "default",
+        .out_pcm = "default",
+        .playback_fifo = "/tmp/ec.input",
+        .out_fifo = "/tmp/ec.output",
+        .rate = 16000,
+        .rec_channels = 2,
+        .out_channels = 1,
+        .bits_per_sample = 16,
+        .buffer_size = 1024 * 16,
+        .playback_fifo_size = 1024 * 4,
+        .filter_length = 2048,
+        .bypass = 1};
 
     while ((opt = getopt(argc, argv, "b:c:d:Df:hi:o:r:s")) != -1)
     {
         switch (opt)
         {
         case 'b':
-            buffer_size = atoi(optarg);
+            config.buffer_size = atoi(optarg);
             break;
         case 'c':
-            input_channels = atoi(optarg);
+            config.rec_channels = atoi(optarg);
             break;
         case 'd':
             delay = atoi(optarg);
@@ -84,19 +92,19 @@ int main(int argc, char *argv[])
             daemonize = 1;
             break;
         case 'f':
-            filter_length = atoi(optarg);
+            config.filter_length = atoi(optarg);
             break;
         case 'h':
             printf(usage, argv[0]);
             exit(0);
         case 'i':
-            g_capture_device = optarg;
+            config.rec_pcm = optarg;
             break;
         case 'o':
-            g_playback_device = optarg;
+            config.out_pcm = optarg;
             break;
         case 'r':
-            sample_rate = atoi(optarg);
+            config.rate = atoi(optarg);
             break;
         case 's':
             save_audio = 1;
@@ -149,26 +157,26 @@ int main(int argc, char *argv[])
         }
     }
 
-    int frame_size = sample_rate * 10 / 1000; // 10 ms
+    int frame_size = config.rate * 10 / 1000; // 10 ms
 
     if (save_audio)
     {
         fp_far = fopen("/tmp/playback.raw", "wb");
-        fp_near = fopen("/tmp/recording.raw", "wb");
+        fp_rec = fopen("/tmp/recording.raw", "wb");
         fp_out = fopen("/tmp/out.raw", "wb");
 
-        if (fp_far == NULL || fp_near == NULL || fp_out == NULL)
+        if (fp_far == NULL || fp_rec == NULL || fp_out == NULL)
         {
             printf("Fail to open file(s)\n");
             exit(1);
         }
     }
 
-    near = (int16_t *)calloc(frame_size * input_channels, sizeof(int16_t));
-    far = (int16_t *)calloc(frame_size * output_channels, sizeof(int16_t));
-    out = (int16_t *)calloc(frame_size * input_channels, sizeof(int16_t));
+    rec = (int16_t *)calloc(frame_size * config.rec_channels, sizeof(int16_t));
+    far = (int16_t *)calloc(frame_size * config.out_channels, sizeof(int16_t));
+    out = (int16_t *)calloc(frame_size * config.rec_channels, sizeof(int16_t));
 
-    if (near == NULL || far == NULL || out == NULL)
+    if (rec == NULL || far == NULL || out == NULL)
     {
         printf("Fail to allocate memory\n");
         exit(1);
@@ -181,16 +189,19 @@ int main(int argc, char *argv[])
     sig_int_handler.sa_flags = 0;
     sigaction(SIGINT, &sig_int_handler, NULL);
 
-    echo_state = speex_echo_state_init_mc(frame_size, filter_length, input_channels, output_channels);
-    speex_echo_ctl(echo_state, SPEEX_ECHO_SET_SAMPLING_RATE, &sample_rate);
+    echo_state = speex_echo_state_init_mc(frame_size,
+                                          config.filter_length,
+                                          config.rec_channels,
+                                          config.out_channels);
+    speex_echo_ctl(echo_state, SPEEX_ECHO_SET_SAMPLING_RATE, &(config.rate));
 
-    fifo_setup(&g_ringbuffer[PLAYBACK_INDEX], &g_ringbuffer[PROCESSED_INDEX]);
+    audio_start(&config);
 
-    audio_start(sample_rate, input_channels, buffer_size);
+    fifo_setup(&g_ringbuffer[PROCESSED_INDEX]);
 
     printf("Running... Press Ctrl+C to exit\n");
 
-    int wait_us = frame_size * 1000000 / sample_rate / 2;
+    int wait_us = frame_size * 1000000 / config.rate / 2;
 
     // system delay between recording and playback
     while (PaUtil_GetRingBufferReadAvailable(&g_ringbuffer[CAPTURE_INDEX]) < delay)
@@ -205,7 +216,7 @@ int main(int argc, char *argv[])
         {
             usleep(wait_us);
         }
-        PaUtil_ReadRingBuffer(&g_ringbuffer[CAPTURE_INDEX], near, frame_size);
+        PaUtil_ReadRingBuffer(&g_ringbuffer[CAPTURE_INDEX], rec, frame_size);
 
         while (!g_is_quit && PaUtil_GetRingBufferReadAvailable(&g_ringbuffer[PLAYED_INDEX]) < frame_size)
         {
@@ -213,24 +224,33 @@ int main(int argc, char *argv[])
         }
         PaUtil_ReadRingBuffer(&g_ringbuffer[PLAYED_INDEX], far, frame_size);
 
-        speex_echo_cancellation(echo_state, near, far, out);
+        if (!config.bypass)
+        {
+            speex_echo_cancellation(echo_state, rec, far, out);
+        }
+        else
+        {
+            memcpy(out, rec, frame_size * config.rec_channels * config.bits_per_sample / 8);
+        }
 
-        if (fp_far) {
-            fwrite(near, 2, frame_size * input_channels, fp_near);
+        if (fp_far)
+        {
+            fwrite(rec, 2, frame_size * config.rec_channels, fp_rec);
             fwrite(far, 2, frame_size, fp_far);
-            fwrite(out, 2, frame_size * input_channels, fp_out);
+            fwrite(out, 2, frame_size * config.rec_channels, fp_out);
         }
 
         PaUtil_WriteRingBuffer(&g_ringbuffer[PROCESSED_INDEX], out, frame_size);
     }
 
-    if (fp_far) {
-        fclose(fp_near);
+    if (fp_far)
+    {
+        fclose(fp_rec);
         fclose(fp_far);
         fclose(fp_out);
     }
 
-    free(near);
+    free(rec);
     free(far);
     free(out);
 
