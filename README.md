@@ -11,6 +11,34 @@ and then output it to another named pipe.
 
 It uses ALSA API to read and write audio, uses SpeexDSP's AEC algorithm.
 
+
+```
++-------------------+  +-------------------+
+|  PulseAudio       |  |  PulseAudio       |
+|  module-pipe-source  |  module-pipe-sink |
++----------+--------+  +-------+-----------+
+           |                   |             +------------+
+           |                   |             |ALSA        |
+           v                   v             |file plugin |
+    +------+-------+    +------+-------+     +----+-------+
+    |    FIFO      |    |    FIFO      |          |
+    |/tmp/ec.output|    | /tmp/ec.input| <--------+
+    +------+-------+    +------+-------+
+           ^                   |
+           |                   |
+           |                   |
+           |                   |
+        +--+--+                |
+        | AEC | <--------------+
+        +--+--+                |
+           ^                   |
+           |                   v
+    +------+-------+    +------+-------+
+    |  hw:x,y      |    |  hw:x,y      |
+    |  plughw:x,y  |    |  plughw:x,y  |
+    +--------------+    +--------------+
+```
+
 ### Build
 ```
 sudo apt-get -y install libasound2-dev libspeexdsp-dev
