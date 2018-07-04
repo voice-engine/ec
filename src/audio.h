@@ -3,18 +3,15 @@
 #define _AUDIO_H_
 
 #include "conf.h"
-#include "pa_ringbuffer.h"
-
-#define CAPTURE_INDEX       0
-#define PLAYED_INDEX        1
-#define PROCESSED_INDEX     2
-#define PLAYBACK_INDEX      3
 
 
-extern PaUtilRingBuffer g_ringbuffer[];
+int capture_start(conf_t *conf);
+int capture_stop();
+int capture_read(void *buf, size_t frames, int timeout_ms);
+int capture_skip(size_t frames);
 
-void audio_start(conf_t *conf);
-void audio_stop();
-
+int playback_start(conf_t *conf);
+int playback_stop();
+int playback_read(void *buf, size_t frames, int timeout_ms);
 
 #endif // _AUDIO_H_

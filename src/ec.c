@@ -37,7 +37,8 @@ const char *usage =
 
 volatile int g_is_quit = 0;
 
-extern int fifo_setup(PaUtilRingBuffer *capture);
+extern int fifo_setup(conf_t *conf);
+extern int fifo_write(void *buf, size_t frames);
 
 void int_handler(int signal)
 {
@@ -72,8 +73,9 @@ int main(int argc, char *argv[])
         .bits_per_sample = 16,
         .buffer_size = 1024 * 16,
         .playback_fifo_size = 1024 * 4,
-        .filter_length = 2048,
-        .bypass = 1};
+        .filter_length = 4096,
+        .bypass = 1
+    };
 
     while ((opt = getopt(argc, argv, "b:c:d:Df:hi:o:r:s")) != -1)
     {
@@ -195,34 +197,21 @@ int main(int argc, char *argv[])
                                           config.out_channels);
     speex_echo_ctl(echo_state, SPEEX_ECHO_SET_SAMPLING_RATE, &(config.rate));
 
-    audio_start(&config);
-
-    fifo_setup(&g_ringbuffer[PROCESSED_INDEX]);
+    playback_start(&config);
+    capture_start(&config);
+    fifo_setup(&config);
 
     printf("Running... Press Ctrl+C to exit\n");
 
-    int wait_us = frame_size * 1000000 / config.rate / 2;
+    int timeout = 200 * 1000 * frame_size / config.rate;    // ms
 
     // system delay between recording and playback
-    while (PaUtil_GetRingBufferReadAvailable(&g_ringbuffer[CAPTURE_INDEX]) < delay)
-    {
-        usleep(wait_us);
-    }
-    PaUtil_AdvanceRingBufferReadIndex(&g_ringbuffer[CAPTURE_INDEX], delay);
+    printf("skip frames %d\n", capture_skip(delay));
 
     while (!g_is_quit)
     {
-        while (!g_is_quit && PaUtil_GetRingBufferReadAvailable(&g_ringbuffer[CAPTURE_INDEX]) < frame_size)
-        {
-            usleep(wait_us);
-        }
-        PaUtil_ReadRingBuffer(&g_ringbuffer[CAPTURE_INDEX], rec, frame_size);
-
-        while (!g_is_quit && PaUtil_GetRingBufferReadAvailable(&g_ringbuffer[PLAYED_INDEX]) < frame_size)
-        {
-            usleep(wait_us);
-        }
-        PaUtil_ReadRingBuffer(&g_ringbuffer[PLAYED_INDEX], far, frame_size);
+        capture_read(rec, frame_size, timeout);
+        playback_read(far, frame_size, timeout);
 
         if (!config.bypass)
         {
@@ -240,7 +229,7 @@ int main(int argc, char *argv[])
             fwrite(out, 2, frame_size * config.rec_channels, fp_out);
         }
 
-        PaUtil_WriteRingBuffer(&g_ringbuffer[PROCESSED_INDEX], out, frame_size);
+        fifo_write(out, frame_size);
     }
 
     if (fp_far)
@@ -254,7 +243,8 @@ int main(int argc, char *argv[])
     free(far);
     free(out);
 
-    audio_stop();
+    capture_stop();
+    playback_stop();
 
     exit(0);
 

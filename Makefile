@@ -15,7 +15,7 @@ CXXFLAGS += -O3
 
 BINFILE = ec
 
-OBJFILES = src/ec.o src/audio.o src/fifo.o src/pa_ringbuffer.o
+OBJFILES = src/ec.o src/audio.o src/fifo.o src/pa_ringbuffer.o src/util.o
 
 all: $(BINFILE)
 

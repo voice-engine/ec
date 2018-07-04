@@ -15,29 +15,19 @@
 
 #include <alsa/asoundlib.h>
 
+#include "pa_ringbuffer.h"
 #include "audio.h"
 #include "conf.h"
+#include "util.h"
 
-PaUtilRingBuffer g_ringbuffer[3];
+PaUtilRingBuffer g_playback_ringbuffer;
+PaUtilRingBuffer g_capture_ringbuffer;
 
 static pthread_t g_playback_thread;
 static pthread_t g_capture_thread;
 
 extern int g_is_quit;
 
-// from http://graphics.stanford.edu/~seander/bithacks.html#RoundUpPowerOf2
-unsigned up2(unsigned v)
-{
-    v--;
-    v |= v >> 1;
-    v |= v >> 2;
-    v |= v >> 4;
-    v |= v >> 8;
-    v |= v >> 16;
-    v++;
-
-    return v;
-}
 
 int set_params(snd_pcm_t *handle, unsigned rate, unsigned channels, unsigned chunk_size)
 {
@@ -216,16 +206,6 @@ void *playback(void *ptr)
             }
         }
 
-        // ring_buffer_size_t readn = PaUtil_ReadRingBuffer(&g_ringbuffer[PLAYBACK_INDEX], chunk, chunk_size);
-        // if (readn < chunk_size)
-        // {
-        //     memset((char *)chunk + readn * frame_bytes, 0, (chunk_size - readn) * frame_bytes);
-        //     if (readn)
-        //     {
-        //         printf("playback ring buffer is empty\n");
-        //     }
-        // }
-
         count = chunk_size;
         char *data = (char *)chunk;
         while (count > 0 && !g_is_quit)
@@ -247,7 +227,7 @@ void *playback(void *ptr)
             }
             if (r > 0)
             {
-                PaUtil_WriteRingBuffer(&g_ringbuffer[PLAYED_INDEX], data, r);
+                PaUtil_WriteRingBuffer(&g_playback_ringbuffer, data, r);
                 count -= r;
                 data += r * frame_bytes;
             }
@@ -308,7 +288,7 @@ void *capture(void *ptr)
         if (r > 0)
         {
             ring_buffer_size_t written =
-                PaUtil_WriteRingBuffer(&g_ringbuffer[CAPTURE_INDEX], chunk, r);
+                PaUtil_WriteRingBuffer(&g_capture_ringbuffer, chunk, r);
             if (written < r)
             {
                 printf("lost %ld frames\n", r - written);
@@ -322,46 +302,105 @@ void *capture(void *ptr)
     return NULL;
 }
 
-void audio_start(conf_t *conf)
+
+int capture_start(conf_t *conf)
 {
-    int buf_bytes[3];
+    unsigned buffer_size = power2(conf->buffer_size);
+    unsigned buffer_bytes = conf->rec_channels * conf->bits_per_sample / 8;
 
-    unsigned ring_buffer_size = up2(conf->buffer_size);
-
-    buf_bytes[PLAYED_INDEX] = conf->out_channels * conf->bits_per_sample / 8;
-    buf_bytes[CAPTURE_INDEX] = conf->rec_channels * conf->bits_per_sample / 8;
-    buf_bytes[PROCESSED_INDEX] = conf->rec_channels * conf->bits_per_sample / 8;
-
-    for (int i = 0; i < sizeof(g_ringbuffer) / sizeof(g_ringbuffer[0]); i++)
+    void *buf = calloc(buffer_size, buffer_bytes);
+    if (buf == NULL)
     {
-        void *buf = calloc(ring_buffer_size, buf_bytes[i]);
-        if (buf == NULL)
-        {
-            fprintf(stderr, "Fail to allocate memory.\n");
-            exit(1);
-        }
-
-        ring_buffer_size_t ret = PaUtil_InitializeRingBuffer(&g_ringbuffer[i], buf_bytes[i], ring_buffer_size, buf);
-        if (ret == -1)
-        {
-            fprintf(stderr, "Initialize ring buffer but element count is not a power of 2.\n");
-            exit(1);
-        }
+        fprintf(stderr, "Fail to allocate memory.\n");
+        exit(1);
     }
 
-    pthread_create(&g_playback_thread, NULL, playback, conf);
+    ring_buffer_size_t ret = PaUtil_InitializeRingBuffer(&g_capture_ringbuffer, buffer_bytes, buffer_size, buf);
+    if (ret == -1)
+    {
+        fprintf(stderr, "Initialize ring buffer but element count is not a power of 2.\n");
+        exit(1);
+    }
+    
     pthread_create(&g_capture_thread, NULL, capture, conf);
+
+    return 0;
 }
 
-void audio_stop()
+int playback_start(conf_t *conf)
+{
+    unsigned buffer_size = power2(conf->buffer_size);
+    unsigned buffer_bytes = conf->out_channels * conf->bits_per_sample / 8;
+
+    void *buf = calloc(buffer_size, buffer_bytes);
+    if (buf == NULL)
+    {
+        fprintf(stderr, "Fail to allocate memory.\n");
+        exit(1);
+    }
+
+    ring_buffer_size_t ret = PaUtil_InitializeRingBuffer(&g_playback_ringbuffer, buffer_bytes, buffer_size, buf);
+    if (ret == -1)
+    {
+        fprintf(stderr, "Initialize ring buffer but element count is not a power of 2.\n");
+        exit(1);
+    }
+
+    
+    pthread_create(&g_playback_thread, NULL, playback, conf);
+
+    return 0;
+}
+
+
+int capture_stop()
 {
     void *ret = NULL;
-
-    pthread_join(g_playback_thread, &ret);
     pthread_join(g_capture_thread, &ret);
 
-    for (int i = 0; i < sizeof(g_ringbuffer) / sizeof(g_ringbuffer[0]); i++)
+    free(g_capture_ringbuffer.buffer);
+
+    return 0;
+}
+
+int playback_stop()
+{
+    void *ret = NULL;
+    pthread_join(g_playback_thread, &ret);
+
+    free(g_playback_ringbuffer.buffer);
+
+    return 0;
+}
+
+int capture_read(void *buf, size_t frames, int timeout_ms)
+{
+    while (PaUtil_GetRingBufferReadAvailable(&g_capture_ringbuffer) < frames && timeout_ms > 0)
     {
-        free(g_ringbuffer[i].buffer);
+        usleep(10);
+        timeout_ms--;
     }
+
+    return PaUtil_ReadRingBuffer(&g_capture_ringbuffer, buf, frames);
+}
+
+
+int capture_skip(size_t frames)
+{
+    while (PaUtil_GetRingBufferReadAvailable(&g_capture_ringbuffer) < frames)
+    {
+        usleep(1000);
+    }
+    return PaUtil_AdvanceRingBufferReadIndex(&g_capture_ringbuffer, frames);
+}
+
+int playback_read(void *buf, size_t frames, int timeout_ms)
+{
+    while (PaUtil_GetRingBufferReadAvailable(&g_playback_ringbuffer) < frames && timeout_ms > 0)
+    {
+        usleep(1000);
+        timeout_ms--;
+    }
+
+    return PaUtil_ReadRingBuffer(&g_playback_ringbuffer, buf, frames);
 }
