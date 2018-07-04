@@ -28,7 +28,7 @@ It uses ALSA API to read and write audio, uses SpeexDSP's AEC algorithm.
            |                   |
            |                   |
            |                   |
-        +--+--+                |
+        +--+--+                | playback
         | AEC | <--------------+
         +--+--+                |
            ^                   |
@@ -89,9 +89,20 @@ pcm.ec {
 
 
 ### Use with PulseAudio
-PulseAudio has [module-pipe-sink](https://www.freedesktop.org/wiki/Software/PulseAudio/Documentation/User/Modules/#index1h3) and [module-pipe-source](https://www.freedesktop.org/wiki/Software/PulseAudio/Documentation/User/Modules/#index2h3) which can be used to configure `/tmp/ec.input` and `/tmp/ec.output` as the default audio output and input. We just need to copy [pulse.default.pa](pulse.default.pa) to `/etc/pulse`
+PulseAudio has [module-pipe-sink](https://www.freedesktop.org/wiki/Software/PulseAudio/Documentation/User/Modules/#index1h3) and [module-pipe-source](https://www.freedesktop.org/wiki/Software/PulseAudio/Documentation/User/Modules/#index2h3) which can be used to configure `/tmp/ec.input` and `/tmp/ec.output` as the default audio output and input.
 
-PulseAudio will create `/tmp/ec.input` and `/tmp/ec.output`. If the two FIFO already exist, PulseAudio will fail, we should delete the two FIFO (`rm /tmp/ec.input /tmp/ec.output`) and then launch PulseAudio. It means we must start PulseAudio before we start `ec`.
+PulseAudio (version < 12) will create `/tmp/ec.input` and `/tmp/ec.output`. If the two FIFO already exist, PulseAudio will fail, we should delete the two FIFO (`rm /tmp/ec.input /tmp/ec.output`) and then launch PulseAudio. It means we must start PulseAudio before we start `ec`. For example, use the following commands to setup PulseAudio and `ec`.
+
+```
+pacmd load-module module-pipe-sink sink_name=ec.sink format=s16 rate=16000 channels=1 file=/tmp/ec.input
+pacmd load-module module-pipe-source source_name=ec.source format=s16 rate=16000 channels=2 file=/tmp/ec.output
+pacmd set-default-sink ec.sink
+pacmd set-default-source ec.source
+
+./ec -i plughw:1 -o plughw:1
+```
+
+ We can also use PulseAudio's configuration file to load `module-pip-sink` and `module-pipe-source`. Just replace `/etc/pulse/pulse.default.pa` with [pulse.default.pa](pulse.default.pa).
 
 If you have installed PulseAudio but want to disable it, we need to disable PulseAudio's autospawn feature by adding `autospawn=no` to `~/.config/pulse/client.conf` or `/etc/pulse/client.conf`, and then run `pulseaudio -k`
 
