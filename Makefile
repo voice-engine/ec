@@ -13,16 +13,18 @@ LDLIBS += -ldl -lm -Wl,-Bstatic -Wl,-Bdynamic -lrt -lpthread \
 CFLAGS += -O3
 CXXFLAGS += -O3
 
-BINFILE = ec
 
-OBJFILES = src/ec.o src/audio.o src/fifo.o src/pa_ringbuffer.o src/util.o
+COMMON_OBJ = src/audio.o src/fifo.o src/pa_ringbuffer.o src/util.o
+EC_OBJ = $(COMMON_OBJ) src/ec.o
+EC_LOOPBACK_OBJ = $(COMMON_OBJ) src/ec_loopback.o
 
-all: $(BINFILE)
+all: ec ec_loopback
 
-$(BINFILE): $(OBJFILES)
-	$(CXX) $(OBJFILES) $(LDLIBS) -o $(BINFILE)
+ec: $(EC_OBJ)
+	$(CXX) $(EC_OBJ) $(LDLIBS) -o ec
 
-
+ec_loopback: $(EC_LOOPBACK_OBJ)
+	$(CXX) $(EC_LOOPBACK_OBJ) $(LDLIBS) -o ec_loopback
 
 clean:
-	-rm -f *.o $(BINFILE) $(OBJFILES)
+	-rm -f src/*.o ec ec_loopback
