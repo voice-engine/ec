@@ -95,9 +95,9 @@ void *playback(void *ptr)
         exit(1);
     }
 
-    set_params(handle, conf->rate, conf->out_channels, chunk_size);
+    set_params(handle, conf->rate, conf->ref_channels, chunk_size);
 
-    frame_bytes = conf->out_channels * 2;
+    frame_bytes = conf->ref_channels * 2;
     chunk_bytes = chunk_size * frame_bytes;
     chunk = (char *)malloc(chunk_bytes);
     if (chunk == NULL)
@@ -330,7 +330,7 @@ int capture_start(conf_t *conf)
 int playback_start(conf_t *conf)
 {
     unsigned buffer_size = power2(conf->buffer_size);
-    unsigned buffer_bytes = conf->out_channels * conf->bits_per_sample / 8;
+    unsigned buffer_bytes = conf->ref_channels * conf->bits_per_sample / 8;
 
     void *buf = calloc(buffer_size, buffer_bytes);
     if (buf == NULL)

@@ -69,7 +69,8 @@ int main(int argc, char *argv[])
         .out_fifo = "/tmp/ec.output",
         .rate = 16000,
         .rec_channels = 2,
-        .out_channels = 1,
+        .ref_channels = 1,
+        .out_channels = 2,
         .bits_per_sample = 16,
         .buffer_size = 1024 * 16,
         .playback_fifo_size = 1024 * 4,
@@ -86,6 +87,7 @@ int main(int argc, char *argv[])
             break;
         case 'c':
             config.rec_channels = atoi(optarg);
+            config.out_channels = config.rec_channels;
             break;
         case 'd':
             delay = atoi(optarg);
@@ -175,8 +177,8 @@ int main(int argc, char *argv[])
     }
 
     rec = (int16_t *)calloc(frame_size * config.rec_channels, sizeof(int16_t));
-    far = (int16_t *)calloc(frame_size * config.out_channels, sizeof(int16_t));
-    out = (int16_t *)calloc(frame_size * config.rec_channels, sizeof(int16_t));
+    far = (int16_t *)calloc(frame_size * config.ref_channels, sizeof(int16_t));
+    out = (int16_t *)calloc(frame_size * config.out_channels, sizeof(int16_t));
 
     if (rec == NULL || far == NULL || out == NULL)
     {
@@ -194,7 +196,7 @@ int main(int argc, char *argv[])
     echo_state = speex_echo_state_init_mc(frame_size,
                                           config.filter_length,
                                           config.rec_channels,
-                                          config.out_channels);
+                                          config.ref_channels);
     speex_echo_ctl(echo_state, SPEEX_ECHO_SET_SAMPLING_RATE, &(config.rate));
 
     playback_start(&config);
@@ -226,7 +228,7 @@ int main(int argc, char *argv[])
         {
             fwrite(rec, 2, frame_size * config.rec_channels, fp_rec);
             fwrite(far, 2, frame_size, fp_far);
-            fwrite(out, 2, frame_size * config.rec_channels, fp_out);
+            fwrite(out, 2, frame_size * config.out_channels, fp_out);
         }
 
         fifo_write(out, frame_size);

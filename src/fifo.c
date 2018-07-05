@@ -56,7 +56,7 @@ int fifo_setup(conf_t *conf)
     struct stat st;
 
     unsigned buffer_size = power2(conf->buffer_size);
-    unsigned buffer_bytes = conf->rec_channels * conf->bits_per_sample / 8;
+    unsigned buffer_bytes = conf->out_channels * conf->bits_per_sample / 8;
 
     void *buf = calloc(buffer_size, buffer_bytes);
     if (buf == NULL)

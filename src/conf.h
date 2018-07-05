@@ -8,8 +8,9 @@ typedef struct _conf_t {
     char *playback_fifo;    // playback FIFO
     char *out_fifo;         // AEC output FIFO
     unsigned rate;
-    unsigned rec_channels;
-    unsigned out_channels;
+    unsigned rec_channels;  // recording channels
+    unsigned ref_channels;  // reference (playback) channels
+    unsigned out_channels;  // processed audio output channels
     unsigned bits_per_sample;
     unsigned buffer_size;
     unsigned playback_fifo_size;
