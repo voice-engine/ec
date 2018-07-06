@@ -61,8 +61,9 @@ int set_params(snd_pcm_t *handle, unsigned rate, unsigned channels, unsigned chu
     err = snd_pcm_hw_params_set_buffer_size(handle, hw_params, chunk_size * 2);
     assert(err >= 0);
 
-    err = snd_pcm_hw_params_set_period_size(handle, hw_params, chunk_size, 0);
-    assert(err >= 0);
+    // No supported by PulseAudio's ALSA plugin
+    // err = snd_pcm_hw_params_set_period_size(handle, hw_params, chunk_size, 0);
+    // assert(err >= 0);
 
     err = snd_pcm_hw_params(handle, hw_params);
     if (err < 0)
