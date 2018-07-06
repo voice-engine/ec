@@ -16,15 +16,15 @@ CXXFLAGS += -O3
 
 COMMON_OBJ = src/audio.o src/fifo.o src/pa_ringbuffer.o src/util.o
 EC_OBJ = $(COMMON_OBJ) src/ec.o
-EC_LOOPBACK_OBJ = $(COMMON_OBJ) src/ec_loopback.o
+EC_LOOPBACK_OBJ = $(COMMON_OBJ) src/ec_hw.o
 
-all: ec ec_loopback
+all: ec ec_hw
 
 ec: $(EC_OBJ)
 	$(CXX) $(EC_OBJ) $(LDLIBS) -o ec
 
-ec_loopback: $(EC_LOOPBACK_OBJ)
-	$(CXX) $(EC_LOOPBACK_OBJ) $(LDLIBS) -o ec_loopback
+ec_hw: $(EC_LOOPBACK_OBJ)
+	$(CXX) $(EC_LOOPBACK_OBJ) $(LDLIBS) -o ec_hw
 
 clean:
-	-rm -f src/*.o ec ec_loopback
+	-rm -f src/*.o ec ec_hw
