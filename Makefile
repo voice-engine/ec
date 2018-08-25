@@ -1,7 +1,7 @@
 
 CC := gcc
 CXX := g++
-CFLAGS += -Isrc -Wall
+CFLAGS += -Isrc -Wall -std=gnu99
 CXXFLAGS += -Isrc -std=c++0x -Wall -Wno-sign-compare \
     -Wno-unused-local-typedefs -Winit-self -rdynamic \
     -DHAVE_POSIX_MEMALIGN
