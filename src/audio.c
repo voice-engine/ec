@@ -29,11 +29,11 @@ static pthread_t g_capture_thread;
 extern int g_is_quit;
 
 
-int set_params(snd_pcm_t *handle, unsigned rate, unsigned channels, unsigned chunk_size)
+int set_params(snd_pcm_t *handle, snd_pcm_hw_params_t *hw_params, unsigned rate, unsigned channels, unsigned chunk_size)
 {
     int err;
-    snd_pcm_hw_params_t *hw_params;
-    unsigned new_rate = rate;
+    int mmap = 0;
+//    unsigned new_rate = rate;
 
     err = snd_pcm_hw_params_malloc(&hw_params);
     assert(err >= 0);
@@ -41,19 +41,29 @@ int set_params(snd_pcm_t *handle, unsigned rate, unsigned channels, unsigned chu
     err = snd_pcm_hw_params_any(handle, hw_params);
     assert(err >= 0);
 
-    err = snd_pcm_hw_params_set_access(handle, hw_params, SND_PCM_ACCESS_RW_INTERLEAVED);
+    // mmap
+    if (snd_pcm_hw_params_test_access(handle, hw_params, SND_PCM_ACCESS_MMAP_INTERLEAVED) >= 0)
+    {
+	mmap = 1;
+        err = snd_pcm_hw_params_set_access(handle, hw_params, SND_PCM_ACCESS_MMAP_INTERLEAVED);
+    } else {
+        err = snd_pcm_hw_params_set_access(handle, hw_params, SND_PCM_ACCESS_RW_INTERLEAVED);
+    }
     assert(err >= 0);
 
     err = snd_pcm_hw_params_set_format(handle, hw_params, SND_PCM_FORMAT_S16_LE);
     assert(err >= 0);
 
-    err = snd_pcm_hw_params_set_rate_near(handle, hw_params, &new_rate, 0);
+//    err = snd_pcm_hw_params_set_rate_near(handle, hw_params, &new_rate, 0);
+//    assert(err >= 0);
+//    if ((float)rate * 1.05 < new_rate || (float)rate * 0.95 > new_rate)
+//    {
+//        fprintf(stderr, "sample rate %d not support\n", rate);
+//        exit(1);
+//    }
+
+    err = snd_pcm_hw_params_set_rate(handle, hw_params, rate, 0);
     assert(err >= 0);
-    if ((float)rate * 1.05 < new_rate || (float)rate * 0.95 > new_rate)
-    {
-        fprintf(stderr, "sample rate %d not support\n", rate);
-        exit(1);
-    }
 
     err = snd_pcm_hw_params_set_channels(handle, hw_params, channels);
     assert(err >= 0);
@@ -72,13 +82,21 @@ int set_params(snd_pcm_t *handle, unsigned rate, unsigned channels, unsigned chu
         exit(1);
     }
 
+    {
+	snd_output_t *out;
+	snd_output_stdio_attach(&out, stderr, 0);
+	snd_pcm_hw_params_dump(hw_params, out);
+	snd_output_close(out);
+    }
+
     // snd_pcm_hw_params_free(&hw_params);
 
-    return 0;
+    return mmap;
 }
 
 void *playback(void *ptr)
 {
+    snd_pcm_hw_params_t *hw_params;
     int err;
     unsigned chunk_bytes;
     unsigned frame_bytes;
@@ -87,6 +105,7 @@ void *playback(void *ptr)
     unsigned chunk_size = 1024;
     unsigned zero_count = 0;
     conf_t *conf = (conf_t *)ptr;
+    int mmap = 0;
 
     if ((err = snd_pcm_open(&handle, conf->out_pcm, SND_PCM_STREAM_PLAYBACK, 0)) < 0)
     {
@@ -96,7 +115,7 @@ void *playback(void *ptr)
         exit(1);
     }
 
-    set_params(handle, conf->rate, conf->ref_channels, chunk_size);
+    mmap = set_params(handle, hw_params, conf->rate, conf->ref_channels, chunk_size);
 
     frame_bytes = conf->ref_channels * 2;
     chunk_bytes = chunk_size * frame_bytes;
@@ -211,7 +230,13 @@ void *playback(void *ptr)
         char *data = (char *)chunk;
         while (count > 0 && !g_is_quit)
         {
-            ssize_t r = snd_pcm_writei(handle, data, count);
+            ssize_t r;
+	    if (mmap) {
+		r = snd_pcm_mmap_writei(handle, data, count);
+	    } else {
+                r = snd_pcm_writei(handle, data, count);
+	    }
+
             if (r == -EAGAIN || (r >= 0 && (size_t)r < count))
             {
                 snd_pcm_wait(handle, 100);
@@ -243,12 +268,14 @@ void *playback(void *ptr)
 
 void *capture(void *ptr)
 {
+    snd_pcm_hw_params_t *hw_params;
     int err;
     unsigned frame_bytes;
     void *chunk = NULL;
     snd_pcm_t *handle;
     unsigned chunk_size = 1024;
     conf_t *conf = (conf_t *)ptr;
+    int mmap = 0;
 
     if ((err = snd_pcm_open(&handle, conf->rec_pcm, SND_PCM_STREAM_CAPTURE, 0)) < 0)
     {
@@ -258,7 +285,7 @@ void *capture(void *ptr)
         exit(1);
     }
 
-    set_params(handle, conf->rate, conf->rec_channels, chunk_size);
+    mmap = set_params(handle, hw_params, conf->rate, conf->rec_channels, chunk_size * 2);
 
     frame_bytes = conf->rec_channels * 2;
     chunk = malloc(chunk_size * frame_bytes);
@@ -270,7 +297,12 @@ void *capture(void *ptr)
 
     while (!g_is_quit)
     {
-        ssize_t r = snd_pcm_readi(handle, chunk, chunk_size);
+        ssize_t r;
+        if (mmap) {
+	    r = snd_pcm_mmap_readi(handle, chunk, chunk_size);
+	} else {
+            r = snd_pcm_readi(handle, chunk, chunk_size);
+	}
         if (r == -EAGAIN || (r >= 0 && (size_t)r < chunk_size))
         {
             snd_pcm_wait(handle, 100);
@@ -290,7 +322,7 @@ void *capture(void *ptr)
         {
             ring_buffer_size_t written =
                 PaUtil_WriteRingBuffer(&g_capture_ringbuffer, chunk, r);
-            if (written < r)
+            if (written < (r))
             {
                 printf("lost %ld frames\n", r - written);
             }
