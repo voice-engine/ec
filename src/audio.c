@@ -29,11 +29,33 @@ static pthread_t g_capture_thread;
 extern int g_is_quit;
 
 
+static int xrun_recovery(snd_pcm_t *handle, int err)
+{
+
+    if (err == -EPIPE)
+    { /* under-run */
+        err = snd_pcm_prepare(handle);
+        if (err < 0)
+            fprintf(stderr, "Can't recovery from underrun, prepare failed: %s\n", snd_strerror(err));
+    }
+    else if (err == -ESTRPIPE)
+    {
+        while ((err = snd_pcm_resume(handle)) == -EAGAIN)
+            sleep(0.01); /* wait until the suspend flag is released */
+        if (err < 0)
+        {
+            err = snd_pcm_prepare(handle);
+            if (err < 0)
+                fprintf(stderr, "Can't recovery from suspend, prepare failed: %s\n", snd_strerror(err));
+        }
+    }
+    return err;
+}
+
 int set_params(snd_pcm_t *handle, snd_pcm_hw_params_t *hw_params, unsigned rate, unsigned channels, unsigned chunk_size)
 {
     int err;
     int mmap = 0;
-//    unsigned new_rate = rate;
 
     err = snd_pcm_hw_params_malloc(&hw_params);
     assert(err >= 0);
@@ -44,23 +66,17 @@ int set_params(snd_pcm_t *handle, snd_pcm_hw_params_t *hw_params, unsigned rate,
     // mmap
     if (snd_pcm_hw_params_test_access(handle, hw_params, SND_PCM_ACCESS_MMAP_INTERLEAVED) >= 0)
     {
-	mmap = 1;
+        mmap = 1;
         err = snd_pcm_hw_params_set_access(handle, hw_params, SND_PCM_ACCESS_MMAP_INTERLEAVED);
-    } else {
+    }
+    else
+    {
         err = snd_pcm_hw_params_set_access(handle, hw_params, SND_PCM_ACCESS_RW_INTERLEAVED);
     }
     assert(err >= 0);
 
     err = snd_pcm_hw_params_set_format(handle, hw_params, SND_PCM_FORMAT_S16_LE);
     assert(err >= 0);
-
-//    err = snd_pcm_hw_params_set_rate_near(handle, hw_params, &new_rate, 0);
-//    assert(err >= 0);
-//    if ((float)rate * 1.05 < new_rate || (float)rate * 0.95 > new_rate)
-//    {
-//        fprintf(stderr, "sample rate %d not support\n", rate);
-//        exit(1);
-//    }
 
     err = snd_pcm_hw_params_set_rate(handle, hw_params, rate, 0);
     assert(err >= 0);
@@ -82,21 +98,19 @@ int set_params(snd_pcm_t *handle, snd_pcm_hw_params_t *hw_params, unsigned rate,
         exit(1);
     }
 
-    {
-	snd_output_t *out;
-	snd_output_stdio_attach(&out, stderr, 0);
-	snd_pcm_hw_params_dump(hw_params, out);
-	snd_output_close(out);
-    }
-
-    // snd_pcm_hw_params_free(&hw_params);
+    // {
+    //     snd_output_t *out;
+    //     snd_output_stdio_attach(&out, stderr, 0);
+    //     snd_pcm_hw_params_dump(hw_params, out);
+    //     snd_output_close(out);
+    // }
 
     return mmap;
 }
 
 void *playback(void *ptr)
 {
-    snd_pcm_hw_params_t *hw_params;
+    snd_pcm_hw_params_t *hw_params = NULL;
     int err;
     unsigned chunk_bytes;
     unsigned frame_bytes;
@@ -128,9 +142,12 @@ void *playback(void *ptr)
 
     struct stat st;
 
-    if (stat(conf->playback_fifo, &st) != 0) {
+    if (stat(conf->playback_fifo, &st) != 0)
+    {
         mkfifo(conf->playback_fifo, 0666);
-    } else if (!S_ISFIFO(st.st_mode)) {
+    }
+    else if (!S_ISFIFO(st.st_mode))
+    {
         remove(conf->playback_fifo);
         mkfifo(conf->playback_fifo, 0666);
     }
@@ -231,25 +248,27 @@ void *playback(void *ptr)
         while (count > 0 && !g_is_quit)
         {
             ssize_t r;
-	    if (mmap) {
-		r = snd_pcm_mmap_writei(handle, data, count);
-	    } else {
+            if (mmap)
+            {
+                r = snd_pcm_mmap_writei(handle, data, count);
+            }
+            else
+            {
                 r = snd_pcm_writei(handle, data, count);
-	    }
+            }
 
             if (r == -EAGAIN || (r >= 0 && (size_t)r < count))
             {
+                fprintf(stderr, "w playback read error: %s\n", snd_strerror(r));
                 snd_pcm_wait(handle, 100);
-            }
-            else if (r == -EPIPE)
-            {
-                fprintf(stderr, "underrun\n");
-                exit(1);
             }
             else if (r < 0)
             {
-                fprintf(stderr, "write error: %s\n", snd_strerror(r));
-                exit(1);
+                fprintf(stderr, "playback read error: %s\n", snd_strerror(r));
+                if (xrun_recovery(handle, r) < 0)
+                {
+                    exit(1);
+                }
             }
             if (r > 0)
             {
@@ -268,7 +287,7 @@ void *playback(void *ptr)
 
 void *capture(void *ptr)
 {
-    snd_pcm_hw_params_t *hw_params;
+    snd_pcm_hw_params_t *hw_params = NULL;
     int err;
     unsigned frame_bytes;
     void *chunk = NULL;
@@ -298,24 +317,26 @@ void *capture(void *ptr)
     while (!g_is_quit)
     {
         ssize_t r;
-        if (mmap) {
-	    r = snd_pcm_mmap_readi(handle, chunk, chunk_size);
-	} else {
+        if (mmap)
+        {
+            r = snd_pcm_mmap_readi(handle, chunk, chunk_size);
+        }
+        else
+        {
             r = snd_pcm_readi(handle, chunk, chunk_size);
-	}
+        }
         if (r == -EAGAIN || (r >= 0 && (size_t)r < chunk_size))
         {
+            fprintf(stderr, "1 read error: %s\n", snd_strerror(r));
             snd_pcm_wait(handle, 100);
-        }
-        else if (r == -EPIPE)
-        {
-            fprintf(stderr, "overrun\n");
-            exit(1);
         }
         else if (r < 0)
         {
             fprintf(stderr, "read error: %s\n", snd_strerror(r));
-            exit(1);
+            if (xrun_recovery(handle, r) < 0)
+            {
+                exit(1);
+            }
         }
 
         if (r > 0)
@@ -335,7 +356,6 @@ void *capture(void *ptr)
     return NULL;
 }
 
-
 int capture_start(conf_t *conf)
 {
     unsigned buffer_size = power2(conf->buffer_size);
@@ -354,7 +374,7 @@ int capture_start(conf_t *conf)
         fprintf(stderr, "Initialize ring buffer but element count is not a power of 2.\n");
         exit(1);
     }
-    
+
     pthread_create(&g_capture_thread, NULL, capture, conf);
 
     return 0;
@@ -379,12 +399,10 @@ int playback_start(conf_t *conf)
         exit(1);
     }
 
-    
     pthread_create(&g_playback_thread, NULL, playback, conf);
 
     return 0;
 }
-
 
 int capture_stop()
 {
@@ -416,7 +434,6 @@ int capture_read(void *buf, size_t frames, int timeout_ms)
 
     return PaUtil_ReadRingBuffer(&g_capture_ringbuffer, buf, frames);
 }
-
 
 int capture_skip(size_t frames)
 {
