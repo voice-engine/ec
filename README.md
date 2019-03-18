@@ -30,30 +30,30 @@ and then output it to another named pipe. The audio stream diagram is like:
 
 
 ```
-+-------------------+  +-------------------+
-|  PulseAudio       |  |  PulseAudio       |
-|  module-pipe-source  |  module-pipe-sink |
-+----------+--------+  +-------+-----------+
-           |                   |             +------------+
-           |                   |             |ALSA        |
-           v                   v             |file plugin |
-    +------+-------+    +------+-------+     +----+-------+
-    |    FIFO      |    |    FIFO      |          |
-    |/tmp/ec.output|    | /tmp/ec.input| <--------+
-    +------+-------+    +------+-------+
-           ^                   |
-           |                   |
-           |                   |
-           |                   |
-        +--+--+                | playback
-        | AEC | <--------------+
-        +--+--+                |
-           ^                   |
-           |                   v
-    +------+-------+    +------+-------+
-    |  hw:x,y      |    |  hw:x,y      |
-    |  plughw:x,y  |    |  plughw:x,y  |
-    +--------------+    +--------------+
+                   +-------------------+  +-------------------+
+                   |  PulseAudio       +  |  PulseAudio       |
+                   |  module+pipe+source  |  module+pipe+sink |
+                   +----------+--------+  +-------+-----------+
++--------------+              ^                   |             +------------+
+|ALSA          |              |                   |             |ALSA        |
+|FIFO plugin   |              |                   v             |file plugin |
++------+-------+       +------+-------+    +------+-------+     +----+-------+
+       ^               |    FIFO      |    |    FIFO      |          |
+       +---------------+/tmp/ec.output|    | /tmp/ec.input| <--------+
+                       +------+-------+    +------+-------+
+                              ^                   |
+                              |                   |
+                              |                   |
+                              |                   |
+                           +--+--+                | playback
+                           | AEC | <--------------+
+                           +--+--+                |
+                              ^                   |
+                              |                   v
+                       +------+-------+    +------+-------+
+                       |  hw:x,y      |    |  hw:x,y      |
+                       |  plughw:x,y  |    |  plughw:x,y  |
+                       +--------------+    +--------------+
 ```
 
 To use `ec`:
@@ -75,27 +75,18 @@ To use `ec`:
     ```
     `ec` reads playback raw audio from the FIFO `/tmp/ec.input` and writes processed recording audio to the FIFO `/tmp/ec.output`
 
-#### Use `ec` with ALSA file plugin
-ALSA's [file plugin](https://www.alsa-project.org/alsa-doc/alsa-lib/pcm_plugins.html) can be used to configure the FIFO `/tmp/ec.input` as the default ALSA output. Just copy [asound.conf](asound.conf) to `~/.asoundrc` to apply the configuration.
+#### Use `ec` with ALSA plugins as ALSA devices
+ALSA's [file plugin](https://www.alsa-project.org/alsa-doc/alsa-lib/pcm_plugins.html) can be used to configure the FIFO `/tmp/ec.input` as a playback device. As the file plugin requires a slave device to support capturing, but nomally we don't have an extra capture device, so [the FIFO plugin](https://github.com/voice-engine/alsa_plugin_fifo) is written to use the FIFO `/tmp/ec.output` as a capture device.
 
-```
-pcm.!default pcm.ec
+1. install the FIFO plugin
 
-pcm.ec {
-    type plug
-    slave {
-        format S16_LE
-        rate 16000
-        channels 1
-        pcm {
-            type file
-            slave.pcm null
-            file "/tmp/ec.input"
-            format "raw"
-        }
-    }
-}
-```
+   ```
+   git clone https://github.com/voice-engine/alsa_plugin_fifo.git
+   cd alsa_plugin_fifo
+   make && sudo make install
+   ```
+
+2. copy [asound.conf](asound.conf) to `~/.asoundrc` (or `/etc/asound.conf`) to apply the configuration.
 
 
 #### Use `ec` with PulseAudio
