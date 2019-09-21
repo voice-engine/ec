@@ -43,6 +43,8 @@ install: all
 	@echo Installing...
 	$(Q)mkdir -p ${DESTDIR}/usr/$(LIBDIR)/alsa-lib/
 	$(Q)install -m 644 $(SND_CONF_BIN) ${DESTDIR}/usr/$(LIBDIR)/alsa-lib/
+	$(Q)install ec-alsa.conf /usr/share/alsa/
+	$(Q)install ec.conf /usr/share/alsa/alsa.conf.d/
 
 uninstall:
 	@echo Un-installing...

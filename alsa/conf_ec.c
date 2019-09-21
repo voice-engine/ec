@@ -2,7 +2,7 @@
 
 
 #include <stdio.h>
-
+#include <unistd.h>
 #include <alsa/asoundlib.h>
 
 
@@ -16,19 +16,14 @@ conf_ec_hook_load_if_running(snd_config_t * root, snd_config_t * config,
 				snd_config_t ** dst,
 				snd_config_t * private_data)
 {
-	int ret = 0;
+	*dst = NULL;
 
-	ret = system("systemctl is-active ec 1>/dev/null");
-	if (ret != 0)
+	if (access("/var/tmp/ec/pid", F_OK) != 0)
 	{
 		return 0;
 	}
 
-	*dst = NULL;
-	ret = snd_config_hook_load(root, config, dst, private_data);
-
-
-	return ret;
+	return  snd_config_hook_load(root, config, dst, private_data);
 }
 
 SND_DLSYM_BUILD_VERSION(conf_ec_hook_load_if_running,

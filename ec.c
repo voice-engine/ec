@@ -105,6 +105,13 @@ void subscribe_callback(struct mosquitto *mosq, void *userdata, int mid, int qos
 
 int main(int argc, char **argv)
 {
+    {
+        int pid = getpid();
+        FILE *fp = fopen("/var/tmp/ec/pid", "w");
+        fprintf(fp, "%d\n", pid);
+        fclose(fp);
+    }
+
     int result;
 
     int last_read = 0;
@@ -363,6 +370,8 @@ int main(int argc, char **argv)
     }
 
     ring_free(ring);
+
+    remove("/var/tmp/ec/pid");
 
     return 0;
 }
