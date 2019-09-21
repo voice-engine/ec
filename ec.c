@@ -110,8 +110,8 @@ int main(int argc, char **argv)
     int last_read = 0;
     int last_write = 0;
 
-    char *aplay = "aplay -t raw -c 1 -r 48000 -f S32_LE --period-size 256 -v -";
-    char *arecord = "arecord -t raw -c 1 -r 16000 -f S16_LE --period-size 256 -v -";
+    char *aplay = "aplay -D hw:Codec -t raw -c 1 -r 48000 -f S32_LE --period-size 960 -v -";
+    char *arecord = "arecord -D ac108 -t raw -c 1 -r 16000 -f S16_LE --period-size 320 -v -";
     int channels_far = 1;
     int channels_near = 1;
     int rate = 16000;
@@ -181,13 +181,13 @@ int main(int argc, char **argv)
                                               channels_far);
         speex_echo_ctl(echo_state, SPEEX_ECHO_SET_SAMPLING_RATE, &rate);
 
-        if ((fin = open(capture_pipe, O_RDWR | O_NONBLOCK)) < 0)
+        if ((fin = open(playback_pipe, O_RDWR | O_NONBLOCK)) < 0)
         {
             fprintf(stderr, "Failed to open: %s\n", CAPTURE_PIPE);
             break;
         }
 
-        if ((fout = open(playback_pipe, O_RDWR | O_NONBLOCK)) < 0)
+        if ((fout = open(capture_pipe, O_RDWR | O_NONBLOCK)) < 0)
         {
             fprintf(stderr, "Failed to open: %s\n", PLAYBACK_PIPE);
             break;
@@ -213,7 +213,7 @@ int main(int argc, char **argv)
 
         clock_gettime(CLOCK_MONOTONIC_RAW, &t1);
 
-        for (int i = 0; i < 16; i++)
+        for (int i = 0; i < 32; i++)
         {
             buf = ring_head(ring);
             memset(buf, 0, 2 * frames);
