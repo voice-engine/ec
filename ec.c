@@ -21,6 +21,7 @@
 #define MAX_EVENTS 1
 #define DELAY_N (3970 + 425)
 #define BLOCK_SIZE 160
+#define M          3        // 48000 Hz to 16000 Hz, decimation factor is 3
 #define NUMTAPS 545
 
 #define CAPTURE_PIPE "/var/tmp/ec/capture.pipe"
@@ -59,9 +60,9 @@ void message_callback(struct mosquitto *mosq, void *userdata, const struct mosqu
             {
                 if (NULL == fp_far)
                 {
-                    fp_far = fopen("far.raw", "w");
-                    fp_near = fopen("near.raw", "w");
-                    fp_out = fopen("out.raw", "w");
+                    fp_far = fopen("/var/tmp/ec/far.raw", "w");
+                    fp_near = fopen("/var/tmp/ec/near.raw", "w");
+                    fp_out = fopen("/var/tmp/ec/out.raw", "w");
                 }
             }
             else if (fp_far)
@@ -119,22 +120,22 @@ int main(int argc, char **argv)
     int last_read = 0;
     int last_write = 0;
 
-    char *aplay = "aplay -D hw:Codec -t raw -c 1 -r 48000 -f S32_LE --period-size 960 -v -";
-    char *arecord = "arecord -D ac108 -t raw -c 1 -r 16000 -f S16_LE --period-size 320 -v -";
+    char *aplay = "aplay -M -D hw:Codec -t raw -c 1 -r 48000 -f S32_LE --period-size 960 -v -";
+    char *arecord = "arecord -M -D ac108 -t raw -c 1 -r 16000 -f S16_LE --period-size 160 --buffer-size=1240 -v -";
     int channels_far = 1;
     int channels_near = 1;
     int rate = 16000;
-    int frames = BLOCK_SIZE;
+    int block_bytes_16k1ch16 = BLOCK_SIZE * 1 * sizeof(int16_t);
+    int block_bytes_48k1ch32 = BLOCK_SIZE * 3 * sizeof(int32_t);
     int filter_length = 4096;
 
-    int effect_blocks = (filter_length + DELAY_N) / frames + 8;
+    int effect_blocks = (filter_length + DELAY_N) / BLOCK_SIZE + 8;
     int effect = 0;
 
-    int16_t buffer_near[frames * channels_near];
-    int16_t buffer_out[frames * channels_near];
+    int16_t buffer_near[BLOCK_SIZE * channels_near];
+    int16_t buffer_out[BLOCK_SIZE * channels_near];
     int16_t *buf;
 
-    uint8_t M = 3; // 48000 Hz to 16000 Hz, decimation factor is 3
     decimate_t S;
     int32_t src[BLOCK_SIZE * M];              // A source array of input data
     int32_t dst[BLOCK_SIZE];                  // A destination array for the transformed data
@@ -147,12 +148,8 @@ int main(int argc, char **argv)
     int fin = -1;
     int fout = -1;
 
-    const char *capture_pipe = getenv("CAPTURE_PIPE");
-    const char *playback_pipe = getenv("PLAYBACK_PIPE");
-    if (NULL == capture_pipe)
-        capture_pipe = CAPTURE_PIPE;
-    if (NULL == playback_pipe)
-        playback_pipe = PLAYBACK_PIPE;
+    const char *capture_pipe = CAPTURE_PIPE;
+    const char *playback_pipe = PLAYBACK_PIPE;
 
     ring_t *ring = ring_new(20);
     ring_head_advance(ring, DELAY_N * 2);
@@ -184,7 +181,7 @@ int main(int argc, char **argv)
     do
     {
         SpeexEchoState *echo_state;
-        echo_state = speex_echo_state_init_mc(frames,
+        echo_state = speex_echo_state_init_mc(BLOCK_SIZE,
                                               filter_length,
                                               channels_near,
                                               channels_far);
@@ -214,118 +211,92 @@ int main(int argc, char **argv)
             break;
         }
 
-        struct timespec t0, t1, t2, t3, t4, t5;
+        fread(buffer_near, sizeof(int16_t) * channels_near, BLOCK_SIZE, frecord);
 
-        clock_gettime(CLOCK_MONOTONIC_RAW, &t0);
-
-        fread(buffer_near, 2 * channels_near, frames, frecord);
-
-        clock_gettime(CLOCK_MONOTONIC_RAW, &t1);
-
-        for (int i = 0; i < 32; i++)
+        memset(src, 0, block_bytes_48k1ch32);
+        for (int i=0; i<16; i++)
         {
-            buf = ring_head(ring);
-            memset(buf, 0, 2 * frames);
-            ring_head_advance(ring, 2 * frames);
+            fwrite(src, sizeof(int32_t), BLOCK_SIZE * M, fplay);
 
-            memset(src, 0, sizeof(int32_t) * frames * M);
-            result = read(fin, src, sizeof(int32_t) * frames * M);
+            buf = ring_head(ring);
+            memset(buf, 0, block_bytes_16k1ch16);
+            ring_head_advance(ring, block_bytes_16k1ch16);
+        }
+
+
+        struct epoll_event event, events[MAX_EVENTS];
+        int epoll_fd = epoll_create1(0);
+
+        event.events = EPOLLIN;
+        event.data.fd = fin;
+
+        if(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fin, &event))
+        {
+            printf("Failed to add file descriptor to epoll\n");
+            break;
+        }
+
+        struct timespec t0, t1, t2, t3, t4, t5;
+        while (!g_quit)
+        {
+            clock_gettime(CLOCK_MONOTONIC_RAW, &t0);
+
+            int event_count = epoll_wait(epoll_fd, events, MAX_EVENTS, 0);
+            if (event_count > 0)
+            {
+                result = read(fin, src, block_bytes_48k1ch32);
+
+                // zero check
+                int nonzero = 0;
+                for (int i=0; i<result; i+=4)
+                {
+                    if (0 != src[i])
+                    {
+                        nonzero = 1;
+                        if (result < block_bytes_48k1ch32)
+                        {
+                            memset((uint8_t *)src + result, 0, block_bytes_48k1ch32 - result);
+                        }
+                        else
+                        {
+                            if (0 >= effect)
+                            {
+                                char *message = "1";
+                                mosquitto_publish(mosq, NULL, "/voicen/amp", 1, message, 0, 0);
+                            }
+                            effect = effect_blocks;
+                        }
+                        break;
+                    }
+                }
+
+                if (0 > result)
+                {
+                    memset(src, 0, block_bytes_48k1ch32);
+                }
+                else if (0 == nonzero)
+                {
+                    result = 0;
+                }
+            }
+            else
+            {
+                result = 0;
+                memset(src, 0, block_bytes_48k1ch32);
+            }
+
             if (result != last_read)
             {
                 last_read = result;
                 printf("r %d\n", result);
             }
 
-            if (result > 0)
-            {
-                if (0 >= effect)
-                {
-                    char *message = "1";
-                    mosquitto_publish(mosq, NULL, "/voicen/amp", 1, message, 0, 0);
-                }
-                effect = effect_blocks;
-            }
-
-            fwrite(src, sizeof(int32_t), frames * M, fplay);
-
-            decimate_process(&S, src, dst);
-            for (int i = 0; i < frames; i++)
-            {
-                buf[i] = dst[i] / (1 << 16);
-            }
-        }
-
-        clock_gettime(CLOCK_MONOTONIC_RAW, &t2);
-
-        printf("dt:\t%ld,\t%ld\n", DELTA(t0, t1), DELTA(t1, t2));
-
-	struct epoll_event event, events[MAX_EVENTS];
-	int epoll_fd = epoll_create1(0);
-
-	event.events = EPOLLIN;
-	event.data.fd = fin;
-
-	if(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fin, &event))
-	{
-		fprintf(stderr, "Failed to add file descriptor to epoll\n");
-		break;
-	}
-
-        while (!g_quit)
-        {
-            clock_gettime(CLOCK_MONOTONIC_RAW, &t0);
-
-	    int event_count = epoll_wait(epoll_fd, events, MAX_EVENTS, 0);
-
-	    if (event_count > 0)
-	    {
-                result = read(fin, src, sizeof(int32_t) * frames * M);
-		    if (result > 0)
-		    {
-			if (0 >= effect)
-			{
-			    char *message = "1";
-			    mosquitto_publish(mosq, NULL, "/voicen/amp", 1, message, 0, 0);
-			}
-			effect = effect_blocks;
-		    }
-	    } else
-	    {
-                result = event_count;
-                memset(src, 0, sizeof(int32_t) * frames * M);
-	    }
-
-
-		if (result != last_read)
-	        {
-	            last_read = result;
-		    printf("r %d\n", result);
-		}
-
             clock_gettime(CLOCK_MONOTONIC_RAW, &t1);
-            fwrite(src, sizeof(int32_t), frames * M, fplay);
+            fwrite(src, sizeof(int32_t), BLOCK_SIZE * M, fplay);
 
-            decimate_process(&S, src, dst);
+            int processing = g_debug || ((last_write > 0) && (effect > 0) && !g_bypass);
 
-            buf = ring_head(ring);
-            // memset(buf, 0, 2 * frames);
-            ring_head_advance(ring, 2 * frames);
-
-            for (int i = 0; i < frames; i++)
-            {
-                buf[i] = dst[i] / (1 << 16);
-            }
-
-            clock_gettime(CLOCK_MONOTONIC_RAW, &t2);
-
-            fread(buffer_near, 2 * channels_near, frames, frecord);
-
-            clock_gettime(CLOCK_MONOTONIC_RAW, &t3);
-
-            buf = ring_tail(ring);
-            ring_tail_advance(ring, 2 * frames);
-
-            if (effect > 0 && !g_bypass)
+            if (0 < effect)
             {
                 effect--;
                 if (0 >= effect)
@@ -333,24 +304,52 @@ int main(int argc, char **argv)
                     char *message = "0";
                     mosquitto_publish(mosq, NULL, "/voicen/amp", 1, message, 0, 0);
                 }
+            }
 
+            buf = ring_head(ring);
+            if (processing)
+            {
+                decimate_process(&S, src, dst);
+
+                for (int i = 0; i < BLOCK_SIZE; i++)
+                {
+                    buf[i] = ((int16_t *)(dst + i))[1];
+                }
+            }
+            else
+            {
+                memset(buf, 0, block_bytes_16k1ch16);
+            }
+            ring_head_advance(ring, block_bytes_16k1ch16);
+
+            clock_gettime(CLOCK_MONOTONIC_RAW, &t2);
+
+            fread(buffer_near, sizeof(int16_t) * channels_near, BLOCK_SIZE, frecord);
+
+            clock_gettime(CLOCK_MONOTONIC_RAW, &t3);
+
+            buf = ring_tail(ring);
+            ring_tail_advance(ring, block_bytes_16k1ch16);
+
+            if (processing)
+            {
                 speex_echo_cancellation(echo_state, buffer_near, buf, buffer_out);
 
                 clock_gettime(CLOCK_MONOTONIC_RAW, &t4);
 
-                result = write(fout, buffer_out, 2 * channels_near * frames);
+                result = write(fout, buffer_out, channels_near * sizeof(int16_t) * BLOCK_SIZE);
 
                 if (g_debug)
                 {
-                    fwrite(buf, 2 * channels_far, frames, fp_far);
-                    fwrite(buffer_near, 2 * channels_near, frames, fp_near);
-                    fwrite(buffer_out, 2 * channels_near, frames, fp_out);
+                    fwrite(buf, sizeof(int16_t) * channels_far, BLOCK_SIZE, fp_far);
+                    fwrite(buffer_near, sizeof(int16_t) * channels_near, BLOCK_SIZE, fp_near);
+                    fwrite(buffer_out, sizeof(int16_t) * channels_near, BLOCK_SIZE, fp_out);
                 }
             }
             else
             {
                 clock_gettime(CLOCK_MONOTONIC_RAW, &t4);
-                result = write(fout, buffer_near, 2 * channels_near * frames);
+                result = write(fout, buffer_near, channels_near * sizeof(int16_t) * BLOCK_SIZE);
             }
 
             if (result != last_write)
@@ -365,11 +364,11 @@ int main(int argc, char **argv)
 
             clock_gettime(CLOCK_MONOTONIC_RAW, &t5);
 
-            if (DELTA(t1, t2) > 8000 || DELTA(t2, t3) > 20000 || DELTA(t3, t4) > 8000 || DELTA(t4, t5) > 1000 || DELTA(t1, t5) > 20000)
+            if (DELTA(t0, t5) > 12000)
             printf("dt:\t%ld,\t%ld,\t%ld,\t%ld,\t%ld\n", DELTA(t0, t1), DELTA(t1, t2), DELTA(t2, t3), DELTA(t3, t4), DELTA(t0, t5));
         }
 
-	close(epoll_fd);
+        close(epoll_fd);
     } while (0);
 
     {
@@ -379,6 +378,10 @@ int main(int argc, char **argv)
 
     mosquitto_destroy(mosq);
     mosquitto_lib_cleanup();
+
+    ring_free(ring);
+
+    remove("/var/tmp/ec/pid");
 
     if (fin >= 0)
         close(fin);
@@ -395,10 +398,6 @@ int main(int argc, char **argv)
         fclose(fp_near);
         fclose(fp_out);
     }
-
-    ring_free(ring);
-
-    remove("/var/tmp/ec/pid");
 
     return 0;
 }
