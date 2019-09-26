@@ -7,10 +7,10 @@ Q	?= @
 CC 	:= gcc
 CFLAGS += -I. -Wall -funroll-loops -ffast-math -fPIC -DPIC -O0 -g
 LD := gcc
-LDFLAGS += -Wall -shared -lasound
+LDFLAGS += -Wall -shared 
 
 SND_CONF_OBJECTS = conf_ec.o
-SND_CONF_LIBS =
+SND_CONF_LIBS = -lasound
 SND_CONF_BIN = libasound_module_conf_ec.so
 
 
@@ -29,7 +29,7 @@ dep:
 
 $(SND_CONF_BIN): $(SND_CONF_OBJECTS)
 	@echo LD $@
-	$(Q)$(LD) $(LDFLAGS) $(SND_CONF_LIBS) $(SND_CONF_OBJECTS) -o $(SND_CONF_BIN)
+	$(Q)$(LD) $(LDFLAGS) $(SND_CONF_OBJECTS) $(SND_CONF_LIBS) -o $(SND_CONF_BIN)
 
 %.o: %.c
 	@echo GCC $<
