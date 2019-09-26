@@ -248,7 +248,7 @@ int main(int argc, char **argv)
 
                 // zero check
                 int nonzero = 0;
-                for (int i=0; i<result; i+=4)
+                for (int i=0; i<(result >> 2); i++)
                 {
                     if (0 != src[i])
                     {
