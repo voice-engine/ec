@@ -10,6 +10,7 @@
 #include <fcntl.h>
 #include <time.h>
 #include <sys/time.h>
+#include <sys/epoll.h>
 
 #include <speex/speex_echo.h>
 #include <mosquitto.h>
@@ -17,6 +18,7 @@
 #include "ring.h"
 #include "decimate.h"
 
+#define MAX_EVENTS 1
 #define DELAY_N (3970 + 425)
 #define BLOCK_SIZE 160
 #define NUMTAPS 545
@@ -257,36 +259,58 @@ int main(int argc, char **argv)
 
         printf("dt:\t%ld,\t%ld\n", DELTA(t0, t1), DELTA(t1, t2));
 
+	struct epoll_event event, events[MAX_EVENTS];
+	int epoll_fd = epoll_create1(0);
+
+	event.events = EPOLLIN;
+	event.data.fd = fin;
+
+	if(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fin, &event))
+	{
+		fprintf(stderr, "Failed to add file descriptor to epoll\n");
+		break;
+	}
+
         while (!g_quit)
         {
             clock_gettime(CLOCK_MONOTONIC_RAW, &t0);
 
-            buf = ring_head(ring);
-            // memset(buf, 0, 2 * frames);
-            ring_head_advance(ring, 2 * frames);
+	    int event_count = epoll_wait(epoll_fd, events, MAX_EVENTS, 0);
 
-            memset(src, 0, sizeof(int32_t) * frames * M);
-            result = read(fin, src, sizeof(int32_t) * frames * M);
-            if (result != last_read)
-            {
-                last_read = result;
-                printf("r %d\n", result);
-            }
+	    if (event_count > 0)
+	    {
+                result = read(fin, src, sizeof(int32_t) * frames * M);
+		    if (result > 0)
+		    {
+			if (0 >= effect)
+			{
+			    char *message = "1";
+			    mosquitto_publish(mosq, NULL, "/voicen/amp", 1, message, 0, 0);
+			}
+			effect = effect_blocks;
+		    }
+	    } else
+	    {
+                result = event_count;
+                memset(src, 0, sizeof(int32_t) * frames * M);
+	    }
 
-            if (result > 0)
-            {
-                if (0 >= effect)
-                {
-                    char *message = "1";
-                    mosquitto_publish(mosq, NULL, "/voicen/amp", 1, message, 0, 0);
-                }
-                effect = effect_blocks;
-            }
+
+		if (result != last_read)
+	        {
+	            last_read = result;
+		    printf("r %d\n", result);
+		}
 
             clock_gettime(CLOCK_MONOTONIC_RAW, &t1);
             fwrite(src, sizeof(int32_t), frames * M, fplay);
 
             decimate_process(&S, src, dst);
+
+            buf = ring_head(ring);
+            // memset(buf, 0, 2 * frames);
+            ring_head_advance(ring, 2 * frames);
+
             for (int i = 0; i < frames; i++)
             {
                 buf[i] = dst[i] / (1 << 16);
@@ -335,14 +359,17 @@ int main(int argc, char **argv)
                 printf("w %d\n", result);
             }
 
-            clock_gettime(CLOCK_MONOTONIC_RAW, &t5);
 
             // mosquitto_publish(mosq, NULL, "/ec/message", msglen,  message, 0, 0);
             mosquitto_loop(mosq, 0, 1);
 
-            //if (DELTA(t3, t4) > 10000 || DELTA(t2, t3) > 50000)
-            //printf("dt:\t%ld,\t%ld,\t%ld,\t%ld,\t%ld\n", DELTA(t0, t1), DELTA(t1, t2), DELTA(t2, t3), DELTA(t3, t4), DELTA(t4, t5));
+            clock_gettime(CLOCK_MONOTONIC_RAW, &t5);
+
+            if (DELTA(t1, t2) > 8000 || DELTA(t2, t3) > 20000 || DELTA(t3, t4) > 8000 || DELTA(t4, t5) > 1000 || DELTA(t1, t5) > 20000)
+            printf("dt:\t%ld,\t%ld,\t%ld,\t%ld,\t%ld\n", DELTA(t0, t1), DELTA(t1, t2), DELTA(t2, t3), DELTA(t3, t4), DELTA(t0, t5));
         }
+
+	close(epoll_fd);
     } while (0);
 
     {
