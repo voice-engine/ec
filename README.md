@@ -8,6 +8,11 @@ It's a part of [voice-engine](https://github.com/voice-engine).
 The goal is to make an open source smart speaker for daily use.
 It uses Linux ALSA API and SpeexDSP's AEC algorithm.
 
+### Tested Hardware
++ [VOICEN Linear 4 Mic Array Kit](https://www.makerfabs.com/voicen-linear-4-mic-array-kit.html)
++ Raspberry Pi with ReSpeaker 2 Mics hat and ReSpeaker 4 Mic Linear Array
++ x86/64 Linux PC
+
 ### Build
 ```
 sudo apt-get -y install libasound2-dev libspeexdsp-dev
