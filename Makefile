@@ -14,7 +14,7 @@ CFLAGS += -O3
 CXXFLAGS += -O3
 
 
-COMMON_OBJ = src/audio.o src/fifo.o src/pa_ringbuffer.o src/util.o
+COMMON_OBJ = src/audio.o src/fifo.o src/pa_ringbuffer.o src/util.o src/auto_channel_detection.o
 EC_OBJ = $(COMMON_OBJ) src/ec.o
 EC_LOOPBACK_OBJ = $(COMMON_OBJ) src/ec_hw.o
 
