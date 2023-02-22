@@ -353,20 +353,21 @@ int main(int argc, char *argv[])
 
             // Feel free to experiment and enable any of the following.
             // Parametrizing each of them is a lot of work and
-            // might need a more complex input system other than optarg (e.g.
-            // config file) float f; int n; n = 1;
-            // speex_preprocess_ctl(preprocess_state[i],
-            // SPEEX_PREPROCESS_SET_DENOISE, &n); n = 0;
-            // speex_preprocess_ctl(preprocess_state[i],
-            // SPEEX_PREPROCESS_SET_AGC, &n); n = 8000;
-            // speex_preprocess_ctl(preprocess_state[i],
-            // SPEEX_PREPROCESS_SET_AGC_LEVEL, &n); n = 0;
-            // speex_preprocess_ctl(preprocess_state[i],
-            // SPEEX_PREPROCESS_SET_DEREVERB, &n); f = .0;
-            // speex_preprocess_ctl(preprocess_state[i],
-            // SPEEX_PREPROCESS_SET_DEREVERB_DECAY, &f); f = .0;
-            // speex_preprocess_ctl(preprocess_state[i],
-            // SPEEX_PREPROCESS_SET_DEREVERB_LEVEL, &f);
+            // might need a more complex input system other than optarg(e.g. config file)
+            // float f;
+            // int n;
+            // n = 1;
+            // speex_preprocess_ctl(preprocess_state[i], SPEEX_PREPROCESS_SET_DENOISE, &n);
+            // n = 0;
+            // speex_preprocess_ctl(preprocess_state[i], SPEEX_PREPROCESS_SET_AGC, &n);
+            // n = 8000;
+            // speex_preprocess_ctl(preprocess_state[i], SPEEX_PREPROCESS_SET_AGC_LEVEL, &n);
+            // n = 0;
+            // speex_preprocess_ctl(preprocess_state[i], SPEEX_PREPROCESS_SET_DEREVERB, &n);
+            // f = .0;
+            // speex_preprocess_ctl(preprocess_state[i], SPEEX_PREPROCESS_SET_DEREVERB_DECAY, &f);
+            // f = .0;
+            // speex_preprocess_ctl(preprocess_state[i], SPEEX_PREPROCESS_SET_DEREVERB_LEVEL, &f);
         }
     }
 
