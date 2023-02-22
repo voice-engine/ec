@@ -109,7 +109,6 @@ int detect_loopback_channels(conf_t *config, int16_t *buf, int *loopback_list, e
             unsigned channel = env[env_idx].channel;
             unsigned pos = config->rec_channels * i + channel;
             float s = int16_to_bipNorm(buf[pos]);
-            // int16_t s = buf[pos];
             peak_envelope_follower(&env[env_idx], fabs(s), release);
         }
     }
